@@ -2,14 +2,20 @@
 Pharmacy tools — drug interaction checks and medication information.
 
 These tools are used by the Pharmacist Agent for medication safety review.
-They use built-in reference tables — no external API required.
+They use built-in reference tables for verified common interactions and fall
+back to LLM-powered pharmacological analysis for any drug pair or medication
+not covered by the local tables.
 """
 import json
 import logging
+import os
 
+import litellm
 from crewai.tools import tool as crewai_tool
 
 logger = logging.getLogger(__name__)
+
+_LLM_MODEL = os.getenv("CREWAI_MODEL", "gpt-4o-mini")
 
 # ── Drug interaction table ─────────────────────────────────────────────────────
 # Each entry: (drug_a, drug_b) -> {severity, mechanism, recommendation}
@@ -181,6 +187,254 @@ _DRUG_INTERACTIONS: dict[tuple[str, str], dict] = {
         "mechanism": "Iron supplements reduce levothyroxine absorption.",
         "recommendation": "Separate administration by at least 4 hours. Monitor TSH levels.",
     },
+    # ── Opioid interactions ────────────────────────────────────────────────────
+    ("opioids", "benzodiazepines"): {
+        "severity": "major",
+        "mechanism": "Combined CNS depression increases risk of respiratory depression, sedation, coma, and death.",
+        "recommendation": "Avoid concurrent use. If necessary, use lowest effective doses and monitor respiratory status closely.",
+    },
+    ("morphine", "benzodiazepines"): {
+        "severity": "major",
+        "mechanism": "Additive CNS and respiratory depression. FDA black box warning.",
+        "recommendation": "Avoid combination. If unavoidable, limit dosages and duration. Monitor for respiratory depression.",
+    },
+    ("oxycodone", "benzodiazepines"): {
+        "severity": "major",
+        "mechanism": "Additive CNS and respiratory depression. FDA black box warning.",
+        "recommendation": "Avoid combination. If unavoidable, limit dosages and duration. Monitor for respiratory depression.",
+    },
+    ("tramadol", "gabapentin"): {
+        "severity": "major",
+        "mechanism": "Additive CNS depression and increased seizure risk.",
+        "recommendation": "Use with caution. Monitor for excessive sedation and respiratory depression.",
+    },
+    ("morphine", "gabapentin"): {
+        "severity": "major",
+        "mechanism": "Gabapentin may increase morphine exposure and additive CNS depression.",
+        "recommendation": "Reduce opioid dose. Monitor for respiratory depression and excessive sedation.",
+    },
+    # ── DOAC / anticoagulant interactions ──────────────────────────────────────
+    ("apixaban", "ketoconazole"): {
+        "severity": "major",
+        "mechanism": "Ketoconazole strongly inhibits CYP3A4 and P-gp, significantly increasing apixaban levels.",
+        "recommendation": "Avoid combination. If unavoidable, reduce apixaban dose by 50%.",
+    },
+    ("apixaban", "rifampin"): {
+        "severity": "major",
+        "mechanism": "Rifampin induces CYP3A4 and P-gp, significantly reducing apixaban levels and efficacy.",
+        "recommendation": "Avoid concurrent use. Consider alternative anticoagulant or anti-TB regimen.",
+    },
+    ("rivaroxaban", "ketoconazole"): {
+        "severity": "major",
+        "mechanism": "Ketoconazole inhibits CYP3A4 and P-gp, markedly increasing rivaroxaban levels and bleeding risk.",
+        "recommendation": "Avoid concurrent use.",
+    },
+    ("rivaroxaban", "aspirin"): {
+        "severity": "major",
+        "mechanism": "Additive bleeding risk from combined anticoagulant and antiplatelet effects.",
+        "recommendation": "Avoid unless clinically indicated (e.g. ACS). Use lowest aspirin dose and monitor for bleeding.",
+    },
+    ("apixaban", "aspirin"): {
+        "severity": "major",
+        "mechanism": "Additive bleeding risk from combined anticoagulant and antiplatelet effects.",
+        "recommendation": "Avoid unless clinically indicated. Use lowest aspirin dose and monitor for bleeding.",
+    },
+    ("dabigatran", "verapamil"): {
+        "severity": "major",
+        "mechanism": "Verapamil inhibits P-gp, increasing dabigatran levels and bleeding risk.",
+        "recommendation": "Reduce dabigatran dose. Administer dabigatran at least 2 hours before verapamil.",
+    },
+    ("enoxaparin", "aspirin"): {
+        "severity": "major",
+        "mechanism": "Additive anticoagulant and antiplatelet effects increase bleeding risk.",
+        "recommendation": "Use combination only when clinically indicated. Monitor for signs of bleeding.",
+    },
+    # ── Methotrexate interactions ──────────────────────────────────────────────
+    ("methotrexate", "ibuprofen"): {
+        "severity": "major",
+        "mechanism": "NSAIDs reduce renal clearance of methotrexate, increasing toxicity risk (myelosuppression, nephrotoxicity).",
+        "recommendation": "Avoid NSAIDs with high-dose methotrexate. Monitor closely with low-dose MTX.",
+    },
+    ("methotrexate", "trimethoprim"): {
+        "severity": "major",
+        "mechanism": "Both drugs are folate antagonists. Increased risk of pancytopenia and bone marrow suppression.",
+        "recommendation": "Avoid combination. If unavoidable, monitor CBC closely and supplement with folic acid.",
+    },
+    ("methotrexate", "omeprazole"): {
+        "severity": "moderate",
+        "mechanism": "PPIs may delay renal elimination of methotrexate, increasing exposure and toxicity risk.",
+        "recommendation": "Consider withholding PPI during high-dose methotrexate. Monitor methotrexate levels.",
+    },
+    # ── Antidepressant / psychiatric interactions ──────────────────────────────
+    ("venlafaxine", "tramadol"): {
+        "severity": "major",
+        "mechanism": "Both drugs increase serotonin levels, risk of serotonin syndrome. Both are CYP2D6 substrates.",
+        "recommendation": "Avoid combination. Use alternative analgesic.",
+    },
+    ("duloxetine", "tramadol"): {
+        "severity": "major",
+        "mechanism": "Serotonergic activity of both drugs increases risk of serotonin syndrome.",
+        "recommendation": "Avoid combination if possible. Monitor for serotonin syndrome symptoms.",
+    },
+    ("escitalopram", "tramadol"): {
+        "severity": "major",
+        "mechanism": "Both drugs increase serotonin levels, risk of serotonin syndrome.",
+        "recommendation": "Avoid combination. Use alternative analgesic.",
+    },
+    ("fluoxetine", "maoi"): {
+        "severity": "major",
+        "mechanism": "Extremely high serotonin levels leading to potentially fatal serotonin syndrome.",
+        "recommendation": "Contraindicated. Allow 5-week washout after stopping fluoxetine before starting MAOI.",
+    },
+    ("lithium", "furosemide"): {
+        "severity": "major",
+        "mechanism": "Furosemide-induced sodium and volume depletion increases lithium reabsorption and toxicity risk.",
+        "recommendation": "Monitor lithium levels closely. Maintain adequate hydration and sodium intake.",
+    },
+    ("lithium", "hydrochlorothiazide"): {
+        "severity": "major",
+        "mechanism": "Thiazides reduce renal lithium clearance by 25%, increasing lithium levels and toxicity risk.",
+        "recommendation": "Reduce lithium dose by 25-50% when initiating thiazide. Monitor lithium levels closely.",
+    },
+    # ── Diabetes medication interactions ───────────────────────────────────────
+    ("metformin", "furosemide"): {
+        "severity": "moderate",
+        "mechanism": "Furosemide may increase metformin levels. Both can affect renal function.",
+        "recommendation": "Monitor renal function and blood glucose. Adjust metformin dose if needed.",
+    },
+    ("glipizide", "fluconazole"): {
+        "severity": "major",
+        "mechanism": "Fluconazole inhibits CYP2C9, increasing glipizide levels and hypoglycaemia risk.",
+        "recommendation": "Monitor blood glucose closely. Consider reducing glipizide dose.",
+    },
+    ("insulin", "ace inhibitors"): {
+        "severity": "moderate",
+        "mechanism": "ACE inhibitors may enhance insulin sensitivity and increase hypoglycaemia risk.",
+        "recommendation": "Monitor blood glucose when initiating ACE inhibitor. Adjust insulin dose if needed.",
+    },
+    ("empagliflozin", "furosemide"): {
+        "severity": "moderate",
+        "mechanism": "Both drugs cause volume depletion, increasing risk of dehydration and hypotension.",
+        "recommendation": "Assess volume status before initiating. Monitor blood pressure and renal function.",
+    },
+    # ── Cardiovascular interactions ────────────────────────────────────────────
+    ("diltiazem", "simvastatin"): {
+        "severity": "major",
+        "mechanism": "Diltiazem inhibits CYP3A4, increasing simvastatin levels and rhabdomyolysis risk.",
+        "recommendation": "Do not exceed simvastatin 10mg daily with diltiazem. Consider alternative statin.",
+    },
+    ("diltiazem", "metoprolol"): {
+        "severity": "major",
+        "mechanism": "Additive negative chronotropic and dromotropic effects, risk of severe bradycardia and heart block.",
+        "recommendation": "Avoid combination if possible. If necessary, monitor ECG and heart rate closely.",
+    },
+    ("amiodarone", "metformin"): {
+        "severity": "moderate",
+        "mechanism": "Amiodarone may cause thyroid dysfunction, complicating diabetes management.",
+        "recommendation": "Monitor thyroid function and blood glucose regularly.",
+    },
+    ("amlodipine", "simvastatin"): {
+        "severity": "moderate",
+        "mechanism": "Amlodipine inhibits CYP3A4, increasing simvastatin exposure and myopathy risk.",
+        "recommendation": "Do not exceed simvastatin 20mg daily with amlodipine.",
+    },
+    ("losartan", "potassium"): {
+        "severity": "major",
+        "mechanism": "ARBs reduce aldosterone causing potassium retention. Supplemental potassium increases hyperkalemia risk.",
+        "recommendation": "Monitor serum potassium regularly. Avoid potassium supplements unless clearly indicated.",
+    },
+    ("losartan", "spironolactone"): {
+        "severity": "major",
+        "mechanism": "Both drugs cause potassium retention, significantly increasing hyperkalemia risk.",
+        "recommendation": "If combination is necessary, monitor potassium closely and start at low doses.",
+    },
+    ("lisinopril", "losartan"): {
+        "severity": "major",
+        "mechanism": "Dual RAAS blockade increases risk of hypotension, hyperkalemia, and renal impairment.",
+        "recommendation": "Avoid combination. No benefit shown in most patient populations.",
+    },
+    # ── Antibiotic interactions ────────────────────────────────────────────────
+    ("azithromycin", "amiodarone"): {
+        "severity": "major",
+        "mechanism": "Both drugs prolong QT interval, increasing risk of torsades de pointes.",
+        "recommendation": "Avoid combination. Use alternative antibiotic without QT prolongation risk.",
+    },
+    ("clarithromycin", "amiodarone"): {
+        "severity": "major",
+        "mechanism": "Both prolong QT interval. Clarithromycin also inhibits CYP3A4, affecting amiodarone metabolism.",
+        "recommendation": "Avoid combination. Use azithromycin with caution or choose alternative antibiotic.",
+    },
+    ("ciprofloxacin", "tizanidine"): {
+        "severity": "major",
+        "mechanism": "Ciprofloxacin inhibits CYP1A2, increasing tizanidine levels up to 10-fold, causing severe hypotension and sedation.",
+        "recommendation": "Contraindicated. Use alternative antibiotic or muscle relaxant.",
+    },
+    ("doxycycline", "antacids"): {
+        "severity": "moderate",
+        "mechanism": "Divalent cations in antacids chelate doxycycline, reducing absorption by up to 80%.",
+        "recommendation": "Separate administration by at least 2-3 hours.",
+    },
+    ("doxycycline", "iron"): {
+        "severity": "moderate",
+        "mechanism": "Iron forms insoluble chelates with doxycycline, reducing absorption.",
+        "recommendation": "Separate administration by at least 2-3 hours.",
+    },
+    ("amoxicillin", "methotrexate"): {
+        "severity": "major",
+        "mechanism": "Amoxicillin may reduce renal clearance of methotrexate, increasing toxicity risk.",
+        "recommendation": "Monitor methotrexate levels and renal function closely.",
+    },
+    # ── Miscellaneous common interactions ──────────────────────────────────────
+    ("sildenafil", "nitrates"): {
+        "severity": "major",
+        "mechanism": "Both cause vasodilation via NO/cGMP pathway, risk of severe life-threatening hypotension.",
+        "recommendation": "Contraindicated. Do not use within 24 hours of nitrate administration (48 hours for tadalafil).",
+    },
+    ("potassium", "spironolactone"): {
+        "severity": "major",
+        "mechanism": "Spironolactone is a potassium-sparing diuretic. Supplemental potassium significantly increases hyperkalemia risk.",
+        "recommendation": "Avoid potassium supplements unless clearly indicated. Monitor serum potassium regularly.",
+    },
+    ("albuterol", "propranolol"): {
+        "severity": "major",
+        "mechanism": "Non-selective beta-blockers antagonize bronchodilator effect of albuterol and may cause bronchospasm.",
+        "recommendation": "Avoid non-selective beta-blockers in asthma/COPD. Use cardioselective beta-blocker if needed.",
+    },
+    ("tamsulosin", "sildenafil"): {
+        "severity": "moderate",
+        "mechanism": "Additive vasodilatory and alpha-blocking effects, risk of orthostatic hypotension.",
+        "recommendation": "Start sildenafil at lowest dose. Advise patient about orthostatic precautions.",
+    },
+    ("ondansetron", "amiodarone"): {
+        "severity": "major",
+        "mechanism": "Both drugs prolong QT interval, increasing risk of torsades de pointes.",
+        "recommendation": "Avoid combination. Use alternative antiemetic (e.g. metoclopramide).",
+    },
+    ("prednisone", "ibuprofen"): {
+        "severity": "moderate",
+        "mechanism": "Additive risk of GI bleeding and peptic ulceration.",
+        "recommendation": "Use combination with caution. Consider PPI gastroprotection. Monitor for GI symptoms.",
+    },
+    ("prednisone", "insulin"): {
+        "severity": "moderate",
+        "mechanism": "Corticosteroids cause hyperglycaemia by increasing insulin resistance and hepatic gluconeogenesis.",
+        "recommendation": "Monitor blood glucose frequently. Increase insulin dose as needed during steroid therapy.",
+    },
+    ("carbamazepine", "oral contraceptives"): {
+        "severity": "major",
+        "mechanism": "Carbamazepine induces CYP3A4, reducing contraceptive hormone levels and efficacy.",
+        "recommendation": "Use alternative contraception (e.g. IUD, depot injection). Do not rely on oral contraceptives alone.",
+    },
+    ("phenytoin", "warfarin"): {
+        "severity": "major",
+        "mechanism": "Complex interaction: phenytoin initially displaces warfarin from protein binding, then induces metabolism.",
+        "recommendation": "Monitor INR closely when starting, adjusting, or stopping phenytoin. Frequent dose adjustments needed.",
+    },
+    ("valproic acid", "lamotrigine"): {
+        "severity": "major",
+        "mechanism": "Valproic acid inhibits lamotrigine glucuronidation, approximately doubling lamotrigine levels.",
+        "recommendation": "Reduce lamotrigine dose by 50% when combined with valproic acid. Titrate slowly.",
+    },
 }
 
 # ── Medication info table ──────────────────────────────────────────────────────
@@ -333,6 +587,350 @@ _MEDICATION_INFO: dict[str, dict] = {
         "serious_side_effects": ["rhabdomyolysis", "hepatotoxicity"],
         "contraindications": ["active liver disease", "pregnancy", "concurrent strong CYP3A4 inhibitors"],
     },
+    # ── Additional common medications ──────────────────────────────────────────
+    "acetaminophen": {
+        "drug_class": "Analgesic / antipyretic",
+        "standard_dose_range": "325mg-1000mg every 4-6 hours (max 4000mg/day; 2000mg/day with liver disease)",
+        "common_side_effects": ["nausea", "rash (rare)"],
+        "serious_side_effects": ["hepatotoxicity (overdose)", "acute liver failure", "Stevens-Johnson syndrome (rare)"],
+        "contraindications": ["severe hepatic impairment", "active liver disease"],
+    },
+    "ibuprofen": {
+        "drug_class": "Non-steroidal anti-inflammatory drug (NSAID)",
+        "standard_dose_range": "200mg-800mg three times daily (max 3200mg/day)",
+        "common_side_effects": ["dyspepsia", "nausea", "headache", "dizziness"],
+        "serious_side_effects": ["GI bleeding", "renal impairment", "cardiovascular events", "peptic ulcer"],
+        "contraindications": ["active GI bleeding", "severe renal impairment", "third trimester pregnancy", "CABG surgery"],
+    },
+    "naproxen": {
+        "drug_class": "Non-steroidal anti-inflammatory drug (NSAID)",
+        "standard_dose_range": "250mg-500mg twice daily (max 1250mg/day)",
+        "common_side_effects": ["dyspepsia", "nausea", "headache", "drowsiness"],
+        "serious_side_effects": ["GI bleeding", "renal impairment", "cardiovascular events"],
+        "contraindications": ["active GI bleeding", "severe renal impairment", "third trimester pregnancy", "CABG surgery"],
+    },
+    "tramadol": {
+        "drug_class": "Opioid analgesic (weak mu-agonist / SNRI)",
+        "standard_dose_range": "50mg-100mg every 4-6 hours (max 400mg/day)",
+        "common_side_effects": ["nausea", "dizziness", "constipation", "headache", "somnolence"],
+        "serious_side_effects": ["seizures", "serotonin syndrome", "respiratory depression", "dependence"],
+        "contraindications": ["concurrent MAOIs", "uncontrolled epilepsy", "severe respiratory depression"],
+    },
+    "morphine": {
+        "drug_class": "Opioid analgesic (strong mu-agonist)",
+        "standard_dose_range": "10mg-30mg every 4 hours (oral); titrated to effect in severe pain",
+        "common_side_effects": ["constipation", "nausea", "sedation", "pruritus", "respiratory depression"],
+        "serious_side_effects": ["severe respiratory depression", "hypotension", "dependence", "paralytic ileus"],
+        "contraindications": ["severe respiratory depression", "acute or severe bronchial asthma", "paralytic ileus"],
+    },
+    "oxycodone": {
+        "drug_class": "Opioid analgesic (strong mu-agonist)",
+        "standard_dose_range": "5mg-15mg every 4-6 hours (immediate release); titrated to effect",
+        "common_side_effects": ["constipation", "nausea", "somnolence", "dizziness", "pruritus"],
+        "serious_side_effects": ["respiratory depression", "dependence", "hypotension"],
+        "contraindications": ["significant respiratory depression", "acute or severe bronchial asthma", "paralytic ileus"],
+    },
+    "fluoxetine": {
+        "drug_class": "Selective serotonin reuptake inhibitor (SSRI)",
+        "standard_dose_range": "20mg-80mg once daily",
+        "common_side_effects": ["nausea", "headache", "insomnia", "anxiety", "sexual dysfunction"],
+        "serious_side_effects": ["serotonin syndrome", "suicidal ideation (young adults)", "hyponatraemia", "QT prolongation"],
+        "contraindications": ["concurrent MAOI use", "concurrent pimozide or thioridazine"],
+    },
+    "escitalopram": {
+        "drug_class": "Selective serotonin reuptake inhibitor (SSRI)",
+        "standard_dose_range": "5mg-20mg once daily",
+        "common_side_effects": ["nausea", "insomnia", "fatigue", "sexual dysfunction", "headache"],
+        "serious_side_effects": ["serotonin syndrome", "QT prolongation", "suicidal ideation (young adults)", "hyponatraemia"],
+        "contraindications": ["concurrent MAOI use", "concurrent pimozide", "QT prolongation"],
+    },
+    "venlafaxine": {
+        "drug_class": "Serotonin-norepinephrine reuptake inhibitor (SNRI)",
+        "standard_dose_range": "75mg-225mg once daily (extended release)",
+        "common_side_effects": ["nausea", "headache", "dizziness", "insomnia", "sweating"],
+        "serious_side_effects": ["serotonin syndrome", "hypertension", "suicidal ideation (young adults)", "discontinuation syndrome"],
+        "contraindications": ["concurrent MAOI use", "uncontrolled hypertension"],
+    },
+    "duloxetine": {
+        "drug_class": "Serotonin-norepinephrine reuptake inhibitor (SNRI)",
+        "standard_dose_range": "30mg-120mg once daily",
+        "common_side_effects": ["nausea", "dry mouth", "constipation", "fatigue", "dizziness"],
+        "serious_side_effects": ["hepatotoxicity", "serotonin syndrome", "suicidal ideation", "hypertension"],
+        "contraindications": ["concurrent MAOI use", "uncontrolled narrow-angle glaucoma", "severe hepatic impairment"],
+    },
+    "alprazolam": {
+        "drug_class": "Benzodiazepine (anxiolytic)",
+        "standard_dose_range": "0.25mg-0.5mg three times daily (max 4mg/day for anxiety)",
+        "common_side_effects": ["drowsiness", "fatigue", "ataxia", "memory impairment"],
+        "serious_side_effects": ["respiratory depression (with opioids)", "dependence", "paradoxical reactions", "withdrawal seizures"],
+        "contraindications": ["acute narrow-angle glaucoma", "concurrent strong CYP3A4 inhibitors (ketoconazole, itraconazole)"],
+    },
+    "diazepam": {
+        "drug_class": "Benzodiazepine (anxiolytic / anticonvulsant / muscle relaxant)",
+        "standard_dose_range": "2mg-10mg two to four times daily",
+        "common_side_effects": ["sedation", "fatigue", "ataxia", "muscle weakness"],
+        "serious_side_effects": ["respiratory depression", "dependence", "paradoxical reactions"],
+        "contraindications": ["acute narrow-angle glaucoma", "severe respiratory insufficiency", "myasthenia gravis"],
+    },
+    "lorazepam": {
+        "drug_class": "Benzodiazepine (anxiolytic)",
+        "standard_dose_range": "0.5mg-2mg two to three times daily",
+        "common_side_effects": ["sedation", "dizziness", "weakness", "unsteadiness"],
+        "serious_side_effects": ["respiratory depression", "dependence", "paradoxical agitation"],
+        "contraindications": ["acute narrow-angle glaucoma", "severe respiratory insufficiency", "sleep apnoea"],
+    },
+    "zolpidem": {
+        "drug_class": "Non-benzodiazepine hypnotic (Z-drug)",
+        "standard_dose_range": "5mg-10mg at bedtime (5mg for women and elderly)",
+        "common_side_effects": ["drowsiness", "dizziness", "headache", "diarrhoea"],
+        "serious_side_effects": ["complex sleep behaviours (sleepwalking)", "respiratory depression", "dependence", "anaphylaxis"],
+        "contraindications": ["severe respiratory insufficiency", "severe hepatic impairment", "myasthenia gravis"],
+    },
+    "rosuvastatin": {
+        "drug_class": "HMG-CoA reductase inhibitor (statin)",
+        "standard_dose_range": "5mg-40mg once daily",
+        "common_side_effects": ["myalgia", "headache", "abdominal pain", "nausea"],
+        "serious_side_effects": ["rhabdomyolysis", "hepatotoxicity", "new-onset diabetes"],
+        "contraindications": ["active liver disease", "unexplained persistent transaminase elevation", "pregnancy"],
+    },
+    "pravastatin": {
+        "drug_class": "HMG-CoA reductase inhibitor (statin)",
+        "standard_dose_range": "10mg-80mg once daily",
+        "common_side_effects": ["headache", "nausea", "myalgia", "fatigue"],
+        "serious_side_effects": ["rhabdomyolysis", "hepatotoxicity"],
+        "contraindications": ["active liver disease", "pregnancy"],
+    },
+    "spironolactone": {
+        "drug_class": "Potassium-sparing diuretic / aldosterone antagonist",
+        "standard_dose_range": "25mg-200mg daily",
+        "common_side_effects": ["hyperkalaemia", "gynaecomastia", "breast tenderness", "dizziness"],
+        "serious_side_effects": ["severe hyperkalaemia", "hyponatraemia", "metabolic acidosis"],
+        "contraindications": ["hyperkalaemia", "Addison's disease", "anuria", "severe renal impairment"],
+    },
+    "digoxin": {
+        "drug_class": "Cardiac glycoside",
+        "standard_dose_range": "0.125mg-0.25mg once daily (target level 0.5-2.0 ng/mL)",
+        "common_side_effects": ["nausea", "diarrhoea", "dizziness", "visual disturbances"],
+        "serious_side_effects": ["cardiac arrhythmias", "heart block", "digoxin toxicity"],
+        "contraindications": ["ventricular fibrillation", "hypertrophic obstructive cardiomyopathy"],
+    },
+    "amiodarone": {
+        "drug_class": "Class III antiarrhythmic",
+        "standard_dose_range": "200mg-400mg daily (after loading dose of 800-1600mg/day for 1-3 weeks)",
+        "common_side_effects": ["nausea", "photosensitivity", "tremor", "corneal microdeposits"],
+        "serious_side_effects": ["pulmonary toxicity", "thyroid dysfunction", "hepatotoxicity", "peripheral neuropathy", "QT prolongation"],
+        "contraindications": ["sinus node disease", "second/third degree heart block", "severe thyroid dysfunction"],
+    },
+    "verapamil": {
+        "drug_class": "Non-dihydropyridine calcium channel blocker",
+        "standard_dose_range": "80mg-120mg three times daily or 120mg-480mg once daily (SR)",
+        "common_side_effects": ["constipation", "dizziness", "headache", "peripheral oedema"],
+        "serious_side_effects": ["bradycardia", "heart block", "heart failure exacerbation", "hypotension"],
+        "contraindications": ["severe LV dysfunction", "second/third degree heart block", "sick sinus syndrome", "concurrent IV beta-blockers"],
+    },
+    "diltiazem": {
+        "drug_class": "Non-dihydropyridine calcium channel blocker",
+        "standard_dose_range": "120mg-360mg daily (extended release)",
+        "common_side_effects": ["dizziness", "headache", "peripheral oedema", "bradycardia"],
+        "serious_side_effects": ["severe bradycardia", "heart block", "heart failure"],
+        "contraindications": ["severe LV dysfunction", "sick sinus syndrome", "second/third degree heart block"],
+    },
+    "empagliflozin": {
+        "drug_class": "SGLT2 inhibitor (antidiabetic)",
+        "standard_dose_range": "10mg-25mg once daily",
+        "common_side_effects": ["genital mycotic infections", "urinary tract infections", "increased urination", "hypotension"],
+        "serious_side_effects": ["diabetic ketoacidosis", "necrotising fasciitis of perineum", "acute kidney injury"],
+        "contraindications": ["severe renal impairment (eGFR <20 mL/min for glycaemic control)", "dialysis"],
+    },
+    "dapagliflozin": {
+        "drug_class": "SGLT2 inhibitor (antidiabetic)",
+        "standard_dose_range": "5mg-10mg once daily",
+        "common_side_effects": ["genital mycotic infections", "urinary tract infections", "back pain", "increased urination"],
+        "serious_side_effects": ["diabetic ketoacidosis", "necrotising fasciitis of perineum", "volume depletion"],
+        "contraindications": ["dialysis", "type 1 diabetes (for glycaemic control)"],
+    },
+    "sitagliptin": {
+        "drug_class": "DPP-4 inhibitor (antidiabetic)",
+        "standard_dose_range": "100mg once daily (50mg if eGFR 30-45; 25mg if eGFR <30)",
+        "common_side_effects": ["headache", "nasopharyngitis", "upper respiratory infection"],
+        "serious_side_effects": ["pancreatitis", "severe joint pain", "bullous pemphigoid"],
+        "contraindications": ["history of pancreatitis with DPP-4 inhibitors"],
+    },
+    "glipizide": {
+        "drug_class": "Sulfonylurea (antidiabetic)",
+        "standard_dose_range": "2.5mg-20mg daily (max 40mg/day in divided doses)",
+        "common_side_effects": ["hypoglycaemia", "weight gain", "nausea", "dizziness"],
+        "serious_side_effects": ["severe hypoglycaemia", "haemolytic anaemia", "hepatotoxicity"],
+        "contraindications": ["type 1 diabetes", "diabetic ketoacidosis", "severe hepatic impairment"],
+    },
+    "semaglutide": {
+        "drug_class": "GLP-1 receptor agonist",
+        "standard_dose_range": "0.25mg-2mg weekly (subcutaneous); 3mg-14mg once daily (oral)",
+        "common_side_effects": ["nausea", "vomiting", "diarrhoea", "abdominal pain", "constipation"],
+        "serious_side_effects": ["pancreatitis", "medullary thyroid carcinoma (animal studies)", "gallbladder disease", "acute kidney injury"],
+        "contraindications": ["personal/family history of medullary thyroid carcinoma", "MEN 2 syndrome"],
+    },
+    "liraglutide": {
+        "drug_class": "GLP-1 receptor agonist",
+        "standard_dose_range": "0.6mg-1.8mg once daily (subcutaneous)",
+        "common_side_effects": ["nausea", "vomiting", "diarrhoea", "headache"],
+        "serious_side_effects": ["pancreatitis", "medullary thyroid carcinoma (animal studies)", "gallbladder disease"],
+        "contraindications": ["personal/family history of medullary thyroid carcinoma", "MEN 2 syndrome"],
+    },
+    "rivaroxaban": {
+        "drug_class": "Direct oral anticoagulant (Factor Xa inhibitor)",
+        "standard_dose_range": "10mg-20mg once daily (indication-dependent)",
+        "common_side_effects": ["bleeding", "bruising", "nausea", "anaemia"],
+        "serious_side_effects": ["major haemorrhage", "spinal/epidural haematoma (with neuraxial procedures)"],
+        "contraindications": ["active significant bleeding", "hepatic disease with coagulopathy", "concurrent strong CYP3A4/P-gp inhibitors"],
+    },
+    "apixaban": {
+        "drug_class": "Direct oral anticoagulant (Factor Xa inhibitor)",
+        "standard_dose_range": "2.5mg-5mg twice daily",
+        "common_side_effects": ["bleeding", "bruising", "nausea"],
+        "serious_side_effects": ["major haemorrhage", "spinal/epidural haematoma (with neuraxial procedures)"],
+        "contraindications": ["active pathological bleeding", "severe hepatic disease"],
+    },
+    "dabigatran": {
+        "drug_class": "Direct oral anticoagulant (direct thrombin inhibitor)",
+        "standard_dose_range": "110mg-150mg twice daily",
+        "common_side_effects": ["dyspepsia", "gastritis", "bleeding"],
+        "serious_side_effects": ["major haemorrhage", "GI bleeding (higher vs warfarin)"],
+        "contraindications": ["mechanical prosthetic heart valve", "active bleeding", "severe renal impairment (CrCl <30)"],
+    },
+    "enoxaparin": {
+        "drug_class": "Low molecular weight heparin (anticoagulant)",
+        "standard_dose_range": "40mg daily (prophylaxis); 1mg/kg twice daily (treatment)",
+        "common_side_effects": ["injection site bruising", "bleeding", "thrombocytopenia"],
+        "serious_side_effects": ["major bleeding", "heparin-induced thrombocytopenia", "spinal haematoma"],
+        "contraindications": ["active major bleeding", "HIT", "severe thrombocytopenia"],
+    },
+    "tamsulosin": {
+        "drug_class": "Alpha-1 adrenergic blocker (urological)",
+        "standard_dose_range": "0.4mg-0.8mg once daily",
+        "common_side_effects": ["dizziness", "orthostatic hypotension", "retrograde ejaculation", "rhinitis"],
+        "serious_side_effects": ["intraoperative floppy iris syndrome", "priapism (rare)", "syncope"],
+        "contraindications": ["concurrent strong CYP3A4 inhibitors (with 0.8mg dose)", "history of orthostatic hypotension"],
+    },
+    "sildenafil": {
+        "drug_class": "PDE5 inhibitor",
+        "standard_dose_range": "25mg-100mg as needed (max once daily)",
+        "common_side_effects": ["headache", "flushing", "dyspepsia", "nasal congestion", "visual disturbance"],
+        "serious_side_effects": ["priapism", "sudden hearing loss", "NAION (vision loss)", "severe hypotension"],
+        "contraindications": ["concurrent nitrates", "severe hepatic impairment", "recent stroke or MI"],
+    },
+    "ondansetron": {
+        "drug_class": "5-HT3 receptor antagonist (antiemetic)",
+        "standard_dose_range": "4mg-8mg every 8 hours as needed",
+        "common_side_effects": ["headache", "constipation", "fatigue"],
+        "serious_side_effects": ["QT prolongation", "serotonin syndrome (with serotonergic drugs)", "anaphylaxis"],
+        "contraindications": ["concurrent apomorphine", "congenital long QT syndrome"],
+    },
+    "metoclopramide": {
+        "drug_class": "Dopamine antagonist (prokinetic / antiemetic)",
+        "standard_dose_range": "5mg-10mg three times daily (max 12 weeks)",
+        "common_side_effects": ["drowsiness", "restlessness", "fatigue", "diarrhoea"],
+        "serious_side_effects": ["tardive dyskinesia", "neuroleptic malignant syndrome", "extrapyramidal symptoms"],
+        "contraindications": ["GI obstruction or perforation", "phaeochromocytoma", "epilepsy", "concurrent drugs causing extrapyramidal reactions"],
+    },
+    "azithromycin": {
+        "drug_class": "Macrolide antibiotic",
+        "standard_dose_range": "250mg-500mg once daily (typically 3-5 day course)",
+        "common_side_effects": ["diarrhoea", "nausea", "abdominal pain", "vomiting"],
+        "serious_side_effects": ["QT prolongation", "hepatotoxicity", "C. difficile colitis", "hearing loss"],
+        "contraindications": ["history of cholestatic jaundice with azithromycin", "hepatic impairment from prior azithromycin"],
+    },
+    "doxycycline": {
+        "drug_class": "Tetracycline antibiotic",
+        "standard_dose_range": "100mg twice daily or 200mg once daily",
+        "common_side_effects": ["nausea", "photosensitivity", "oesophageal irritation", "diarrhoea"],
+        "serious_side_effects": ["oesophageal ulceration", "intracranial hypertension", "hepatotoxicity", "tooth discolouration (children)"],
+        "contraindications": ["pregnancy", "children under 8 years", "severe hepatic impairment"],
+    },
+    "metronidazole": {
+        "drug_class": "Nitroimidazole antibiotic / antiprotozoal",
+        "standard_dose_range": "250mg-500mg three times daily (7-14 days typical)",
+        "common_side_effects": ["nausea", "metallic taste", "headache", "dark urine"],
+        "serious_side_effects": ["peripheral neuropathy", "seizures", "disulfiram-like reaction with alcohol"],
+        "contraindications": ["first trimester pregnancy (relative)", "concurrent alcohol use"],
+    },
+    "fluconazole": {
+        "drug_class": "Triazole antifungal",
+        "standard_dose_range": "50mg-400mg once daily (indication-dependent)",
+        "common_side_effects": ["nausea", "headache", "abdominal pain", "diarrhoea"],
+        "serious_side_effects": ["hepatotoxicity", "QT prolongation", "Stevens-Johnson syndrome", "adrenal insufficiency"],
+        "contraindications": ["concurrent terfenadine or cisapride (QT risk)", "hypersensitivity to azoles"],
+    },
+    "trimethoprim": {
+        "drug_class": "Dihydrofolate reductase inhibitor (antibiotic)",
+        "standard_dose_range": "100mg-200mg twice daily (often combined with sulfamethoxazole)",
+        "common_side_effects": ["nausea", "rash", "pruritus", "hyperkalaemia"],
+        "serious_side_effects": ["megaloblastic anaemia", "pancytopenia", "Stevens-Johnson syndrome", "hyperkalaemia"],
+        "contraindications": ["megaloblastic anaemia due to folate deficiency", "severe renal impairment (for TMP/SMX)"],
+    },
+    "albuterol": {
+        "drug_class": "Short-acting beta-2 agonist (bronchodilator)",
+        "standard_dose_range": "2 puffs (90mcg/puff) every 4-6 hours as needed; 2.5mg nebulised",
+        "common_side_effects": ["tremor", "tachycardia", "headache", "nervousness"],
+        "serious_side_effects": ["paradoxical bronchospasm", "hypokalaemia", "cardiac arrhythmias"],
+        "contraindications": ["hypersensitivity to albuterol"],
+    },
+    "montelukast": {
+        "drug_class": "Leukotriene receptor antagonist",
+        "standard_dose_range": "10mg once daily at bedtime (adults)",
+        "common_side_effects": ["headache", "abdominal pain", "cough"],
+        "serious_side_effects": ["neuropsychiatric events (depression, suicidal ideation — FDA boxed warning)", "Churg-Strauss syndrome"],
+        "contraindications": ["hypersensitivity to montelukast"],
+    },
+    "tiotropium": {
+        "drug_class": "Long-acting muscarinic antagonist (LAMA) — inhaled anticholinergic",
+        "standard_dose_range": "18mcg (capsule) or 2.5mcg (Respimat) once daily by inhalation",
+        "common_side_effects": ["dry mouth", "pharyngitis", "upper respiratory tract infection"],
+        "serious_side_effects": ["paradoxical bronchospasm", "urinary retention", "angle-closure glaucoma"],
+        "contraindications": ["hypersensitivity to tiotropium or atropine derivatives"],
+    },
+    "methotrexate": {
+        "drug_class": "Antimetabolite / disease-modifying antirheumatic drug (DMARD)",
+        "standard_dose_range": "7.5mg-25mg once weekly (RA/psoriasis); variable for oncology",
+        "common_side_effects": ["nausea", "fatigue", "mouth sores", "abdominal discomfort"],
+        "serious_side_effects": ["myelosuppression", "hepatotoxicity", "pulmonary toxicity", "nephrotoxicity"],
+        "contraindications": ["pregnancy", "breastfeeding", "alcoholism", "immunodeficiency", "pre-existing blood dyscrasias"],
+    },
+    "lithium": {
+        "drug_class": "Mood stabiliser",
+        "standard_dose_range": "300mg-600mg two to three times daily (target level 0.6-1.2 mEq/L)",
+        "common_side_effects": ["tremor", "thirst", "polyuria", "weight gain", "GI upset"],
+        "serious_side_effects": ["lithium toxicity", "nephrogenic diabetes insipidus", "hypothyroidism", "cardiac arrhythmias"],
+        "contraindications": ["severe renal impairment", "Brugada syndrome", "Addison's disease"],
+    },
+    "carbamazepine": {
+        "drug_class": "Anticonvulsant / mood stabiliser",
+        "standard_dose_range": "200mg-1200mg daily in divided doses",
+        "common_side_effects": ["dizziness", "drowsiness", "nausea", "ataxia", "diplopia"],
+        "serious_side_effects": ["Stevens-Johnson syndrome / TEN", "aplastic anaemia", "agranulocytosis", "hyponatraemia", "hepatotoxicity"],
+        "contraindications": ["bone marrow depression", "concurrent MAOIs", "AV conduction abnormalities", "HLA-B*1502 positive (SJS risk)"],
+    },
+    "valproic acid": {
+        "drug_class": "Anticonvulsant / mood stabiliser",
+        "standard_dose_range": "250mg-1000mg two to three times daily (target level 50-100 mcg/mL)",
+        "common_side_effects": ["nausea", "tremor", "weight gain", "alopecia", "drowsiness"],
+        "serious_side_effects": ["hepatotoxicity", "pancreatitis", "thrombocytopenia", "teratogenicity (neural tube defects)"],
+        "contraindications": ["hepatic disease", "urea cycle disorders", "pregnancy", "mitochondrial disorders (POLG mutations)"],
+    },
+    "lamotrigine": {
+        "drug_class": "Anticonvulsant / mood stabiliser",
+        "standard_dose_range": "25mg-400mg daily (must titrate slowly; lower with valproate)",
+        "common_side_effects": ["headache", "dizziness", "diplopia", "nausea", "rash"],
+        "serious_side_effects": ["Stevens-Johnson syndrome / TEN", "aseptic meningitis", "haemophagocytic lymphohistiocytosis"],
+        "contraindications": ["hypersensitivity to lamotrigine"],
+    },
+    "phenytoin": {
+        "drug_class": "Anticonvulsant (hydantoin)",
+        "standard_dose_range": "100mg two to three times daily (target level 10-20 mcg/mL)",
+        "common_side_effects": ["dizziness", "nystagmus", "gingival hyperplasia", "hirsutism", "ataxia"],
+        "serious_side_effects": ["Stevens-Johnson syndrome / TEN", "hepatotoxicity", "megaloblastic anaemia", "purple glove syndrome (IV)"],
+        "contraindications": ["sinus bradycardia", "sinoatrial block", "second/third degree heart block", "Adams-Stokes syndrome"],
+    },
 }
 
 
@@ -341,11 +939,114 @@ def _normalize_drug_name(name: str) -> str:
     return name.strip().lower().replace("-", " ").replace("_", " ")
 
 
+def _llm_drug_interaction(drug_a: str, drug_b: str) -> str:
+    """Use the LLM to analyse a drug-drug interaction not in the local table."""
+    logger.info("llm_drug_interaction drug_a=%s drug_b=%s", drug_a, drug_b)
+    try:
+        response = litellm.completion(
+            model=_LLM_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a clinical pharmacologist. Analyse the potential interaction "
+                        "between two medications. Respond ONLY with a JSON object containing: "
+                        "severity (none/minor/moderate/major), mechanism (pharmacological explanation), "
+                        "recommendation (clinical action). Be concise and evidence-based. "
+                        "If there is genuinely no interaction, set severity to 'none'."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Analyse the drug-drug interaction between {drug_a} and {drug_b}.",
+                },
+            ],
+            temperature=0.1,
+            max_tokens=500,
+        )
+        content = response.choices[0].message.content.strip()
+        # Parse JSON from the LLM response (handle markdown code fences)
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+        parsed = json.loads(content)
+        return json.dumps({
+            "status": "interaction_found" if parsed.get("severity", "none") != "none" else "no_interaction",
+            "drug_a": drug_a,
+            "drug_b": drug_b,
+            "severity": parsed.get("severity", "unknown"),
+            "mechanism": parsed.get("mechanism", ""),
+            "recommendation": parsed.get("recommendation", ""),
+            "source": "ai_analysis",
+            "note": "Analysis generated by AI — verify with a pharmacist or drug interaction database for clinical decisions.",
+        })
+    except Exception as e:
+        logger.warning("llm_drug_interaction_failed error=%s", e)
+        return json.dumps({
+            "status": "analysis_unavailable",
+            "drug_a": drug_a,
+            "drug_b": drug_b,
+            "note": "Neither the built-in reference table nor AI analysis could evaluate this pair. Consult a pharmacist.",
+        })
+
+
+def _llm_medication_info(drug_name: str) -> str:
+    """Use the LLM to provide medication information not in the local table."""
+    logger.info("llm_medication_info drug=%s", drug_name)
+    try:
+        response = litellm.completion(
+            model=_LLM_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a clinical pharmacologist. Provide medication information. "
+                        "Respond ONLY with a JSON object containing: drug_class, "
+                        "standard_dose_range, common_side_effects (array), "
+                        "serious_side_effects (array), contraindications (array). "
+                        "Be concise, accurate, and evidence-based."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Provide clinical information for the medication: {drug_name}.",
+                },
+            ],
+            temperature=0.1,
+            max_tokens=500,
+        )
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+        parsed = json.loads(content)
+        return json.dumps({
+            "status": "found",
+            "drug_name": drug_name,
+            "source": "ai_analysis",
+            "note": "Information generated by AI — verify with official prescribing information for clinical decisions.",
+            **parsed,
+        })
+    except Exception as e:
+        logger.warning("llm_medication_info_failed error=%s", e)
+        return json.dumps({
+            "status": "not_found",
+            "drug_name": drug_name,
+            "note": "Medication not found in built-in reference table and AI analysis is unavailable.",
+        })
+
+
 @crewai_tool("Check Drug Interactions")
 def check_drug_interactions(drug_a: str, drug_b: str) -> str:
     """
-    Check for known drug-drug interactions between two medications.
-    Uses a built-in reference table of 30+ common interaction pairs.
+    Check for drug-drug interactions between two medications.
+    First checks a built-in verified reference table of 30+ common interaction
+    pairs, then falls back to AI-powered pharmacological analysis for any
+    drug pair not in the table.
 
     Args:
         drug_a: First medication name.
@@ -356,7 +1057,7 @@ def check_drug_interactions(drug_a: str, drug_b: str) -> str:
 
     logger.info("tool_check_drug_interactions drug_a=%s drug_b=%s", a, b)
 
-    # Check both orderings
+    # 1. Exact match in verified reference table
     interaction = _DRUG_INTERACTIONS.get((a, b)) or _DRUG_INTERACTIONS.get((b, a))
 
     if interaction:
@@ -367,46 +1068,38 @@ def check_drug_interactions(drug_a: str, drug_b: str) -> str:
             "severity": interaction["severity"],
             "mechanism": interaction["mechanism"],
             "recommendation": interaction["recommendation"],
+            "source": "verified_reference",
         })
 
-    # Partial match — check if either drug name is a substring
-    for (da, db), info in _DRUG_INTERACTIONS.items():
-        if (a in da or da in a) and (b in db or db in b):
-            return json.dumps({
-                "status": "interaction_found",
-                "drug_a": drug_a,
-                "drug_b": drug_b,
-                "matched_pair": f"{da} + {db}",
-                "severity": info["severity"],
-                "mechanism": info["mechanism"],
-                "recommendation": info["recommendation"],
-                "note": "Matched via partial name matching.",
-            })
-        if (a in db or db in a) and (b in da or da in b):
-            return json.dumps({
-                "status": "interaction_found",
-                "drug_a": drug_a,
-                "drug_b": drug_b,
-                "matched_pair": f"{da} + {db}",
-                "severity": info["severity"],
-                "mechanism": info["mechanism"],
-                "recommendation": info["recommendation"],
-                "note": "Matched via partial name matching.",
-            })
+    # 2. Partial match in verified reference table (min 4-char names to avoid false positives)
+    if len(a) >= 4 and len(b) >= 4:
+        for (da, db), info in _DRUG_INTERACTIONS.items():
+            pairs_to_check = [(a, da, b, db), (a, db, b, da)]
+            for (x, xref, y, yref) in pairs_to_check:
+                if (x in xref or xref in x) and (y in yref or yref in y):
+                    return json.dumps({
+                        "status": "interaction_found",
+                        "drug_a": drug_a,
+                        "drug_b": drug_b,
+                        "matched_pair": f"{da} + {db}",
+                        "severity": info["severity"],
+                        "mechanism": info["mechanism"],
+                        "recommendation": info["recommendation"],
+                        "source": "verified_reference",
+                        "note": "Matched via partial name matching.",
+                    })
 
-    return json.dumps({
-        "status": "no_interaction_found",
-        "drug_a": drug_a,
-        "drug_b": drug_b,
-        "note": "No known interaction found in the built-in reference table. This does not guarantee safety — consult a pharmacist or comprehensive drug interaction database.",
-    })
+    # 3. Fall back to AI-powered analysis
+    return _llm_drug_interaction(drug_a, drug_b)
 
 
 @crewai_tool("Get Medication Info")
 def get_medication_info(drug_name: str) -> str:
     """
-    Get standard medication information including drug class, dosage range,
-    side effects, and contraindications from the built-in reference table.
+    Get medication information including drug class, dosage range, side effects,
+    and contraindications. First checks a built-in verified reference table of
+    20+ common medications, then falls back to AI-powered analysis for any
+    medication not in the table.
 
     Args:
         drug_name: Name of the medication to look up.
@@ -414,28 +1107,28 @@ def get_medication_info(drug_name: str) -> str:
     name = _normalize_drug_name(drug_name)
     logger.info("tool_get_medication_info drug=%s", name)
 
+    # 1. Exact match
     info = _MEDICATION_INFO.get(name)
     if info:
         return json.dumps({
             "status": "found",
             "drug_name": drug_name,
+            "source": "verified_reference",
             **info,
         })
 
-    # Partial match
-    for key, info in _MEDICATION_INFO.items():
-        if name in key or key in name:
-            return json.dumps({
-                "status": "found",
-                "drug_name": drug_name,
-                "matched_name": key,
-                "note": "Matched via partial name matching.",
-                **info,
-            })
+    # 2. Partial match (min 4 chars to avoid false positives)
+    if len(name) >= 4:
+        for key, med_info in _MEDICATION_INFO.items():
+            if name in key or key in name:
+                return json.dumps({
+                    "status": "found",
+                    "drug_name": drug_name,
+                    "matched_name": key,
+                    "source": "verified_reference",
+                    "note": "Matched via partial name matching.",
+                    **med_info,
+                })
 
-    return json.dumps({
-        "status": "not_found",
-        "drug_name": drug_name,
-        "note": "Medication not found in built-in reference table.",
-        "available_medications": sorted(_MEDICATION_INFO.keys()),
-    })
+    # 3. Fall back to AI-powered analysis
+    return _llm_medication_info(drug_name)

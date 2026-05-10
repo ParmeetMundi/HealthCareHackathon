@@ -27,15 +27,22 @@ clinical_notes_task:
 
     Search DocumentReference and DiagnosticReport resources for
     relevant clinical notes, discharge summaries, referral letters,
-    and progress notes. Decode base64-encoded content if present.
+    and progress notes. The document content has already been decoded
+    from base64 — read the "decoded_text" field directly.
     Summarise key findings, diagnoses, and recommendations from
     each document.
+
+    IMPORTANT: If a query returns count=0, do NOT re-query the same
+    resource or delegate to other agents. Simply report "No data
+    available" for that section and move on.
   expected_output: >
     A summary of relevant clinical documents including document type,
     date, author (if available), and key clinical content. Highlight
     significant findings, diagnoses, treatment plans, and follow-up
     recommendations extracted from the documents.
   agent: clinical_notes_agent
+  context:
+    - patient_records_task
 
 radiology_task:
   description: >
@@ -48,12 +55,18 @@ radiology_task:
     - Key findings
     - Radiologist impression
     - Recommendations for follow-up
+
+    IMPORTANT: If a query returns count=0, do NOT re-query the same
+    resource or delegate to other agents. Simply report "No imaging
+    studies or radiology reports available" and move on immediately.
   expected_output: >
     A structured radiology summary listing each imaging study with
     its modality, date, findings, impression, and recommendations.
     Flag any urgent or critical findings. Note any recommended
     follow-up imaging or procedures.
   agent: radiology_agent
+  context:
+    - patient_records_task
 
 pharmacy_review_task:
   description: >
@@ -67,6 +80,11 @@ pharmacy_review_task:
     4. Verify dosage appropriateness for each medication
     5. Identify any medications contraindicated by patient conditions
     6. Flag any concerns with severity ratings
+
+    IMPORTANT: If the medication list returns count=0, skip steps 3-6
+    and immediately report "No active medications — no drug interaction
+    or dosage review applicable." Do NOT delegate to other agents or
+    re-query the same data.
   expected_output: >
     A medication safety report containing:
     - Complete active medication list with dosages
@@ -75,6 +93,8 @@ pharmacy_review_task:
     - Condition-based contraindication flags
     - Overall medication safety rating and recommendations
   agent: pharmacist_agent
+  context:
+    - patient_records_task
 
 lab_diagnostics_task:
   description: >
@@ -87,6 +107,10 @@ lab_diagnostics_task:
     - Flag abnormal or critical values
     - Note trends where multiple readings exist (improving/stable/worsening)
     - Correlate findings with known patient conditions
+
+    IMPORTANT: If both lab results and vital signs return count=0,
+    do NOT re-query or delegate. Report "No laboratory results or
+    vital signs available" and move on immediately.
   expected_output: >
     A structured lab summary with:
     - Recent vital signs with reference ranges
@@ -95,6 +119,8 @@ lab_diagnostics_task:
     - Trend indicators (↑ improving, → stable, ↓ worsening)
     - Clinical significance notes for abnormal findings
   agent: lab_diagnostics_agent
+  context:
+    - patient_records_task
 
 surgical_planning_task:
   description: >

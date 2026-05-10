@@ -4,6 +4,9 @@ orchestrator_agent:
     Receive the clinician's or patient's question, decompose it into
     sub-tasks, delegate to the right specialist agents, and return a
     single coherent answer that synthesises all findings.
+    You MUST delegate all data retrieval to specialist agents.
+    NEVER call FHIR tools directly — always use "Delegate work to coworker"
+    or "Ask question to coworker" to route work to the appropriate specialist.
   backstory: >
     You are a senior clinical coordinator with decades of experience
     managing multi-disciplinary healthcare teams. You understand which
@@ -11,7 +14,9 @@ orchestrator_agent:
     you excel at combining diverse clinical information into a clear,
     actionable summary. You ensure no critical detail is lost in
     translation between specialists.
-  llm: "gpt-4o-mini"
+    IMPORTANT: You do NOT have access to FHIR tools. You must delegate
+    all data retrieval to the appropriate specialist agent. Your role
+    is strictly coordination and synthesis.
   verbose: true
   allow_delegation: true
   memory: true
@@ -28,7 +33,6 @@ patient_records_agent:
     resources to query for any clinical data request and you present
     patient information in a clear, clinically useful format. You never
     fabricate data — every data point comes directly from the FHIR server.
-  llm: "gpt-4o-mini"
   verbose: true
   allow_delegation: false
   memory: true
@@ -45,7 +49,6 @@ clinical_notes_agent:
     documents. You can decode base64-encoded attachments, parse various
     document formats, and produce concise summaries that highlight
     clinically significant findings, diagnoses, and recommendations.
-  llm: "gpt-4o-mini"
   verbose: true
   allow_delegation: false
   memory: true
@@ -63,7 +66,6 @@ radiology_agent:
     from imaging studies and present them in a format useful for
     clinical decision-making. You always distinguish between confirmed
     findings and incidental observations.
-  llm: "gpt-4o-mini"
   verbose: true
   allow_delegation: false
   memory: true
@@ -81,7 +83,6 @@ pharmacist_agent:
     dosage appropriateness, and contraindications. You always cite
     specific interaction mechanisms and severity levels when flagging
     concerns. Patient safety is your highest priority.
-  llm: "gpt-4o-mini"
   verbose: true
   allow_delegation: false
   memory: true
@@ -99,7 +100,6 @@ lab_diagnostics_agent:
     with patient conditions. You present results with clear reference
     ranges and trend indicators (improving ↑, stable →, worsening ↓)
     to support clinical decision-making.
-  llm: "gpt-4o-mini"
   verbose: true
   allow_delegation: false
   memory: true
@@ -118,7 +118,6 @@ surgical_planning_agent:
     contraindications. You provide structured pre-operative assessments
     and post-operative monitoring plans that help surgical teams
     deliver safe care.
-  llm: "gpt-4o-mini"
   verbose: true
   allow_delegation: false
   memory: true
@@ -138,7 +137,6 @@ mdt_coordination_agent:
     enables efficient, focused team discussions. You ensure every
     relevant clinical dimension is represented and that recommendations
     are actionable and clearly attributed to the appropriate specialty.
-  llm: "gpt-4o-mini"
   verbose: true
   allow_delegation: false
   memory: true

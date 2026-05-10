@@ -29,6 +29,13 @@ from shared.tools import (
     get_radiology_reports,
     get_lab_results,
     get_procedure_history,
+    get_immunizations,
+    get_encounters,
+    get_care_plans,
+    get_family_member_history,
+    get_coverage,
+    get_appointments,
+    get_service_requests,
     check_drug_interactions,
     get_medication_info,
 )
@@ -37,6 +44,13 @@ from rag.tool import rag_store, rag_retrieve
 logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "config")
+
+# ── Iteration / performance limits ─────────────────────────────────────────────
+# Controls how many loops each agent may perform before being forced to return.
+# Lower values reduce latency; raise only if agents are returning incomplete data.
+
+_MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", "5"))
+_MAX_CREW_RPM = int(os.getenv("MAX_CREW_RPM", "30"))
 
 # ── Tool assignments per agent ─────────────────────────────────────────────────
 # RAG tools (rag_store, rag_retrieve) are added to every agent.
@@ -49,6 +63,10 @@ _AGENT_TOOLS = {
         get_active_medications,
         get_allergies,
         get_care_team,
+        get_immunizations,
+        get_encounters,
+        get_coverage,
+        get_appointments,
     ],
     "clinical_notes_agent": [
         get_document_references,
@@ -72,11 +90,18 @@ _AGENT_TOOLS = {
         get_active_conditions,
         get_active_medications,
         get_procedure_history,
+        get_encounters,
+        get_family_member_history,
+        get_care_plans,
+        get_service_requests,
     ],
     "mdt_coordination_agent": [],
 }
 
 _RAG_TOOLS = [rag_store, rag_retrieve]
+
+# ── Singleton crew cache ───────────────────────────────────────────────────────
+_cached_crew: Crew | None = None
 
 
 def _load_yaml(filename: str) -> dict:
@@ -89,34 +114,42 @@ def build_crew() -> Crew:
     """
     Build and return a CrewAI Crew configured with hierarchical process.
 
-    Loads agent and task definitions from config/agents.yaml and config/tasks.yaml,
-    instantiates all 8 agents with their tools, wires task context dependencies,
-    and returns a Crew ready for kickoff.
+    The crew is built once and cached — subsequent calls return the same
+    instance to avoid re-parsing YAML and re-instantiating agents on every request.
     """
+    global _cached_crew
+    if _cached_crew is not None:
+        logger.info("crew_cache_hit")
+        return _cached_crew
+
     agents_cfg = _load_yaml("agents.yaml")
     tasks_cfg = _load_yaml("tasks.yaml")
 
     # ── Build agents ──────────────────────────────────────────────────────
-    # Default model — used when agent's llm field is not set in YAML
+    # Single LLM model for all agents — configured via CREWAI_MODEL env var.
     default_model = os.getenv("CREWAI_MODEL", "gpt-4o-mini")
 
     agents: dict[str, Agent] = {}
     for name, cfg in agents_cfg.items():
         agent_tools = _AGENT_TOOLS.get(name, []) + _RAG_TOOLS
-        agent_model = cfg.get("llm", default_model)
         agents[name] = Agent(
             role=cfg["role"],
             goal=cfg["goal"],
             backstory=cfg["backstory"],
-            llm=LLM(model=agent_model),
+            llm=LLM(model=default_model),
             tools=agent_tools,
             verbose=cfg.get("verbose", True),
             memory=cfg.get("memory", True),
             allow_delegation=cfg.get("allow_delegation", False),
+            max_iter=_MAX_AGENT_ITER,
         )
-        logger.info("agent_created name=%s model=%s tools=%d", name, agent_model, len(agent_tools))
+        logger.info("agent_created name=%s model=%s tools=%d max_iter=%d", name, default_model, len(agent_tools), _MAX_AGENT_ITER)
 
     # ── Build tasks (without context first) ───────────────────────────────
+    # Tasks that only depend on patient_records_task and not on each other
+    # can run in parallel via async_execution=True.
+    _ASYNC_TASKS = {"clinical_notes_task", "radiology_task", "pharmacy_review_task", "lab_diagnostics_task"}
+
     tasks: dict[str, Task] = {}
     for name, cfg in tasks_cfg.items():
         agent_key = cfg["agent"]
@@ -127,8 +160,9 @@ def build_crew() -> Crew:
             description=cfg["description"],
             expected_output=cfg["expected_output"],
             agent=agents[agent_key],
+            async_execution=name in _ASYNC_TASKS,
         )
-        logger.info("task_created name=%s agent=%s", name, agent_key)
+        logger.info("task_created name=%s agent=%s async=%s", name, agent_key, name in _ASYNC_TASKS)
 
     # ── Wire context dependencies ─────────────────────────────────────────
     for name, cfg in tasks_cfg.items():
@@ -146,16 +180,38 @@ def build_crew() -> Crew:
     model_name = os.getenv("CREWAI_MODEL", "gpt-4o-mini")
     manager_llm = LLM(model=model_name)
 
+    # Explicit manager agent — restricted to delegation only (no FHIR tools).
+    # This prevents the Crew Manager from calling FHIR tools directly and
+    # forces it to route work through the appropriate specialist agents.
+    manager_cfg = agents_cfg.get("orchestrator_agent", {})
+    manager_agent = Agent(
+        role=manager_cfg.get("role", "Clinical triage router and synthesiser"),
+        goal=manager_cfg.get("goal", "Delegate to specialist agents and synthesise findings."),
+        backstory=manager_cfg.get("backstory", "You are a senior clinical coordinator."),
+        llm=manager_llm,
+        tools=[],  # Only RAG tools — no FHIR tools
+        verbose=manager_cfg.get("verbose", True),
+        memory=manager_cfg.get("memory", True),
+        allow_delegation=True,
+        max_iter=_MAX_AGENT_ITER,
+    )
+    logger.info("manager_agent_created model=%s tools=0 (delegation-only)", model_name)
+
+    # Exclude orchestrator_agent from the worker agent list to avoid duplication.
+    worker_agents = [a for name, a in agents.items() if name != "orchestrator_agent"]
+
     crew = Crew(
-        agents=list(agents.values()),
+        agents=worker_agents,
         tasks=list(tasks.values()),
         process=Process.hierarchical,
-        manager_llm=manager_llm,
+        manager_agent=manager_agent,
         verbose=True,
+        max_rpm=_MAX_CREW_RPM,
     )
 
     logger.info(
-        "crew_built agents=%d tasks=%d process=hierarchical manager_model=%s",
-        len(agents), len(tasks), model_name,
+        "crew_built agents=%d tasks=%d process=hierarchical manager_model=%s max_rpm=%d max_agent_iter=%d",
+        len(agents), len(tasks), model_name, _MAX_CREW_RPM, _MAX_AGENT_ITER,
     )
+    _cached_crew = crew
     return crew

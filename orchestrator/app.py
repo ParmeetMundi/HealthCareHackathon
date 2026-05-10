@@ -90,14 +90,17 @@ root_agent = Agent(
     name="orchestrator",
     model=_model,
     description=(
-        "A clinical orchestrator powered by a CrewAI multi-agent system. "
-        "Routes questions to specialist agents (patient records, clinical notes, "
-        "radiology, pharmacy, lab diagnostics, surgical planning, MDT coordination) "
-        "and returns synthesised clinical answers."
+        "An AI-powered clinical decision support system that acts as a virtual "
+        "attending physician. Queries live FHIR R4 patient data through specialist "
+        "agents (patient records, clinical documents, radiology, pharmacy, lab "
+        "diagnostics, surgical planning, MDT coordination), synthesises findings, "
+        "and provides evidence-based clinical reasoning — including differential "
+        "diagnoses, treatment recommendations, risk stratification, and care plans."
     ),
     instruction=(
-        "You are a clinical orchestrator. You MUST always use the run_healthcare_crew "
-        "tool to answer any question. Pass the user's question directly to the tool. "
+        "You are a clinical decision support system acting as a senior attending physician. "
+        "You MUST always use the run_healthcare_crew tool to answer any question. "
+        "Pass the user's question directly to the tool. "
         "Return the tool's output as your final answer without modification. "
         "Do not attempt to answer clinical questions yourself — always delegate to the crew."
     ),
@@ -112,9 +115,11 @@ a2a_app = create_a2a_app(
     agent=root_agent,
     name="orchestrator",
     description=(
-        "A CrewAI-powered clinical orchestrator with specialist agents for "
-        "patient records, clinical notes, radiology, pharmacy, lab diagnostics, "
-        "surgical planning, and MDT coordination."
+        "An AI clinical decision support system powered by a multi-agent CrewAI crew. "
+        "Acts as a virtual attending physician — queries live FHIR R4 patient data, "
+        "performs clinical reasoning, and returns evidence-based assessments covering "
+        "diagnosis, treatment, medication safety, lab interpretation, surgical risk, "
+        "and multi-disciplinary team coordination."
     ),
     url=os.getenv("ORCHESTRATOR_URL", os.getenv("BASE_URL", "http://localhost:8003")),
     port=8003,
@@ -130,19 +135,136 @@ a2a_app = create_a2a_app(
         {"name": "patient/DiagnosticReport.rs",      "required": True},
         {"name": "patient/ImagingStudy.rs",          "required": True},
         {"name": "patient/Procedure.rs",             "required": True},
+        {"name": "patient/Immunization.rs",          "required": True},
+        {"name": "patient/Encounter.rs",             "required": True},
+        {"name": "patient/CarePlan.rs",              "required": True},
+        {"name": "patient/FamilyMemberHistory.rs",   "required": True},
+        {"name": "patient/Coverage.rs",              "required": True},
+        {"name": "patient/Appointment.rs",           "required": True},
+        {"name": "patient/ServiceRequest.rs",        "required": True},
     ],
     skills=[
+        # ── Doctor / Clinical reasoning skills ────────────────────────────
         AgentSkill(
-            id="clinical-orchestration",
-            name="clinical-orchestration",
-            description="Routes clinical questions to specialist agents and returns synthesised answers.",
-            tags=["clinical", "orchestrator", "crewai"],
+            id="clinical-assessment",
+            name="Clinical Assessment & Differential Diagnosis",
+            description=(
+                "Acts as an attending physician — reviews patient history, conditions, "
+                "labs, vitals, imaging, and medications to produce a clinical assessment "
+                "with differential diagnoses ranked by likelihood, supporting evidence, "
+                "and recommended workup to narrow the differential."
+            ),
+            tags=["diagnosis", "differential", "clinical-assessment", "doctor",
+                  "clinical-reasoning", "workup", "history", "physical-exam"],
+        ),
+        AgentSkill(
+            id="treatment-recommendations",
+            name="Treatment Planning & Recommendations",
+            description=(
+                "Generates evidence-based treatment recommendations considering the "
+                "patient's conditions, allergies, current medications, lab values, and "
+                "comorbidities. Covers pharmacological and non-pharmacological options, "
+                "lifestyle modifications, and follow-up timelines."
+            ),
+            tags=["treatment", "therapy", "recommendations", "management",
+                  "follow-up", "care-plan", "guidelines", "evidence-based"],
+        ),
+        AgentSkill(
+            id="risk-stratification",
+            name="Clinical Risk Stratification",
+            description=(
+                "Stratifies patient risk using conditions, family history, labs, vitals, "
+                "and social history. Applies clinical scoring systems (e.g., CHA₂DS₂-VASc, "
+                "Wells, HEART, Framingham) and flags high-risk patients requiring urgent "
+                "intervention or closer monitoring."
+            ),
+            tags=["risk", "scoring", "stratification", "prognosis", "mortality",
+                  "acuity", "triage", "severity"],
+        ),
+        AgentSkill(
+            id="clinical-qa",
+            name="Clinical Question Answering",
+            description=(
+                "Answers open-ended clinical questions about a patient — 'Why is this "
+                "patient on warfarin?', 'Is this patient safe for discharge?', 'What "
+                "caused the elevated creatinine?' — by correlating data across all "
+                "available FHIR resources and reasoning through the clinical picture."
+            ),
+            tags=["question", "clinical-query", "explain", "why", "what",
+                  "patient-question", "reasoning"],
+        ),
+        # ── Data retrieval skills ─────────────────────────────────────────
+        AgentSkill(
+            id="patient-summary",
+            name="Patient Summary & Demographics",
+            description=(
+                "Retrieves comprehensive patient information including demographics, "
+                "active conditions, medications, allergies, immunisations, insurance "
+                "coverage, care team, encounters, and appointments from the FHIR server."
+            ),
+            tags=["patient", "demographics", "conditions", "medications", "allergies",
+                  "immunizations", "encounters", "coverage", "appointments", "care-team"],
+        ),
+        AgentSkill(
+            id="clinical-documents",
+            name="Clinical Document Analysis",
+            description=(
+                "Retrieves and summarises clinical documents — progress notes, discharge "
+                "summaries, referral letters, and diagnostic reports. Decodes base64 "
+                "attachments and extracts key findings, diagnoses, and recommendations."
+            ),
+            tags=["documents", "notes", "discharge-summary", "referral", "clinical-notes"],
+        ),
+        AgentSkill(
+            id="radiology-interpretation",
+            name="Radiology Report Interpretation",
+            description=(
+                "Retrieves and interprets radiology imaging studies (X-ray, CT, MRI, "
+                "ultrasound) and radiology-category diagnostic reports. Presents findings, "
+                "impressions, and follow-up recommendations in structured clinical format."
+            ),
+            tags=["radiology", "imaging", "xray", "ct", "mri", "ultrasound"],
+        ),
+        AgentSkill(
+            id="medication-safety",
+            name="Medication Safety Review",
+            description=(
+                "Reviews active medications for drug-drug interactions, dosage "
+                "appropriateness, and condition-based contraindications. Flags concerns "
+                "with severity ratings (major/moderate/minor) and provides recommendations."
+            ),
+            tags=["pharmacy", "medications", "drug-interactions", "dosage", "contraindications"],
+        ),
+        AgentSkill(
+            id="lab-diagnostics",
+            name="Lab Results & Vitals Interpretation",
+            description=(
+                "Retrieves laboratory results and vital signs, flags out-of-range or "
+                "critical values, identifies trends (improving/stable/worsening), and "
+                "correlates findings with patient conditions."
+            ),
+            tags=["labs", "laboratory", "vitals", "blood-work", "diagnostics", "trends"],
+        ),
+        AgentSkill(
+            id="surgical-risk-assessment",
+            name="Surgical Risk Assessment",
+            description=(
+                "Evaluates surgical fitness using conditions, medications, labs, procedures, "
+                "family history, and care plans. Estimates ASA status, flags perioperative "
+                "medication adjustments, and outlines post-operative monitoring plans."
+            ),
+            tags=["surgery", "pre-operative", "post-operative", "risk-assessment", "perioperative"],
         ),
         AgentSkill(
             id="mdt-briefing",
-            name="mdt-briefing",
-            description="Produces structured MDT briefs aggregating all specialist findings.",
-            tags=["mdt", "multi-disciplinary", "briefing"],
+            name="MDT Brief Generation",
+            description=(
+                "Produces a structured Multi-Disciplinary Team brief aggregating all "
+                "specialist findings into sections: Patient Background, Radiology, Labs, "
+                "Medication Review, Surgical Considerations, Outstanding Questions, and "
+                "MDT Recommendations."
+            ),
+            tags=["mdt", "multi-disciplinary", "briefing", "team-meeting", "synthesis"],
         ),
     ],
 )

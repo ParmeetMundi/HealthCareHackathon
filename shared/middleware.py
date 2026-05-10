@@ -21,7 +21,7 @@ from shared.logging_utils import redact_headers, safe_pretty_json, token_fingerp
 
 logger = logging.getLogger(__name__)
 
-LOG_FULL_PAYLOAD = os.getenv("LOG_FULL_PAYLOAD", "true").lower() == "true"
+LOG_FULL_PAYLOAD = os.getenv("LOG_FULL_PAYLOAD", "false").lower() == "true"
 
 def _load_valid_api_keys() -> set[str]:
     """

@@ -19,7 +19,7 @@ import json
 import logging
 import os
 
-from shared.logging_utils import safe_pretty_json, serialize_for_log, token_fingerprint
+from shared.logging_utils import safe_pretty_json, serialize_for_log, token_fingerprint, _strip_nulls
 
 logger = logging.getLogger(__name__)
 
@@ -136,16 +136,16 @@ def extract_fhir_context(callback_context, llm_request):
     metadata_keys = list(metadata.keys())
 
     if LOG_HOOK_RAW_OBJECTS:
-        logger.info("hook_raw_llm_request=\n%s", safe_pretty_json(serialize_for_log(llm_request)))
-        logger.info(
+        logger.debug("hook_raw_llm_request=\n%s", safe_pretty_json(_strip_nulls(serialize_for_log(llm_request))))
+        logger.debug(
             "hook_raw_callback_context=\n%s",
-            safe_pretty_json({
+            safe_pretty_json(_strip_nulls({
                 "task_id":    getattr(callback_context, "task_id", None),
                 "context_id": getattr(callback_context, "context_id", None),
                 "message_id": getattr(callback_context, "message_id", None),
                 "metadata":   serialize_for_log(getattr(callback_context, "metadata", None)),
                 "state":      serialize_for_log(getattr(callback_context, "state", None)),
-            }),
+            })),
         )
 
     logger.info(
