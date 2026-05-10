@@ -1,0 +1,173 @@
+patient_records_task:
+  description: >
+    Retrieve comprehensive patient data from the FHIR server for the
+    following clinical question: {question}
+
+    Gather:
+    - Patient demographics (name, DOB, gender, contacts)
+    - Active conditions and diagnoses
+    - Active medications with dosages
+    - Known allergies
+    - Care team members
+
+    Present all data in a structured, clinically useful format. If any
+    FHIR query fails, report the error clearly and continue with
+    available data.
+  expected_output: >
+    A structured summary containing patient demographics, active
+    problem list, current medication list with dosages, known
+    allergies, and care team composition. Each section should be
+    clearly labelled. Include dates where available.
+  agent: patient_records_agent
+
+clinical_notes_task:
+  description: >
+    Retrieve and analyse clinical documents related to the following
+    question: {question}
+
+    Search DocumentReference and DiagnosticReport resources for
+    relevant clinical notes, discharge summaries, referral letters,
+    and progress notes. Decode base64-encoded content if present.
+    Summarise key findings, diagnoses, and recommendations from
+    each document.
+  expected_output: >
+    A summary of relevant clinical documents including document type,
+    date, author (if available), and key clinical content. Highlight
+    significant findings, diagnoses, treatment plans, and follow-up
+    recommendations extracted from the documents.
+  agent: clinical_notes_agent
+
+radiology_task:
+  description: >
+    Retrieve and interpret radiology studies and reports for the
+    following question: {question}
+
+    Query ImagingStudy and radiology-category DiagnosticReport
+    resources. For each study found, extract and present:
+    - Study type and date
+    - Key findings
+    - Radiologist impression
+    - Recommendations for follow-up
+  expected_output: >
+    A structured radiology summary listing each imaging study with
+    its modality, date, findings, impression, and recommendations.
+    Flag any urgent or critical findings. Note any recommended
+    follow-up imaging or procedures.
+  agent: radiology_agent
+
+pharmacy_review_task:
+  description: >
+    Perform a comprehensive medication safety review for the following
+    question: {question}
+
+    Steps:
+    1. Retrieve the patient's active medication list
+    2. Retrieve active conditions for context
+    3. Check all medication pairs for drug-drug interactions
+    4. Verify dosage appropriateness for each medication
+    5. Identify any medications contraindicated by patient conditions
+    6. Flag any concerns with severity ratings
+  expected_output: >
+    A medication safety report containing:
+    - Complete active medication list with dosages
+    - Drug-drug interaction findings (with severity: major/moderate/minor)
+    - Dosage appropriateness assessment for each medication
+    - Condition-based contraindication flags
+    - Overall medication safety rating and recommendations
+  agent: pharmacist_agent
+
+lab_diagnostics_task:
+  description: >
+    Retrieve and interpret laboratory results and vital signs for the
+    following question: {question}
+
+    Query recent Observation resources for laboratory results and
+    vital signs. For each result:
+    - Identify if values are within normal reference ranges
+    - Flag abnormal or critical values
+    - Note trends where multiple readings exist (improving/stable/worsening)
+    - Correlate findings with known patient conditions
+  expected_output: >
+    A structured lab summary with:
+    - Recent vital signs with reference ranges
+    - Laboratory results grouped by category (haematology, biochemistry, etc.)
+    - Abnormal values clearly flagged with reference ranges
+    - Trend indicators (↑ improving, → stable, ↓ worsening)
+    - Clinical significance notes for abnormal findings
+  agent: lab_diagnostics_agent
+
+surgical_planning_task:
+  description: >
+    Assess surgical risk and planning considerations for the following
+    question: {question}
+
+    Review:
+    1. Active conditions that affect surgical risk (cardiac, pulmonary,
+       renal, hepatic, metabolic)
+    2. Current medications requiring perioperative management
+       (anticoagulants, antiplatelets, diabetes medications, etc.)
+    3. Relevant lab values (coagulation, renal function, haemoglobin)
+    4. Procedure history for relevant surgical context
+    5. Known allergies (especially anaesthesia-related)
+  expected_output: >
+    A pre-operative assessment containing:
+    - ASA physical status classification estimate
+    - Condition-based risk factors with severity
+    - Medications requiring perioperative adjustment
+    - Lab values relevant to surgical fitness
+    - Contraindications or cautions
+    - Recommended post-operative monitoring plan
+  agent: surgical_planning_agent
+  context:
+    - patient_records_task
+    - lab_diagnostics_task
+    - pharmacy_review_task
+
+mdt_synthesis_task:
+  description: >
+    Synthesise all specialist findings into a comprehensive MDT
+    (Multi-Disciplinary Team) brief for the following question: {question}
+
+    Using the outputs from all specialist agents, create a structured
+    MDT document with the following mandatory sections:
+    - Patient Background
+    - Radiology Findings
+    - Lab Summary
+    - Medication Review
+    - Surgical Considerations
+    - Outstanding Questions
+    - MDT Recommendations
+
+    Ensure no critical findings from any specialist are omitted.
+    Cross-reference findings between specialties where relevant.
+  expected_output: >
+    A complete MDT brief document with all seven required sections:
+
+    ## Patient Background
+    Demographics, presenting complaint, relevant history
+
+    ## Radiology Findings
+    Summary of imaging studies and key findings
+
+    ## Lab Summary
+    Abnormal results, trends, clinical significance
+
+    ## Medication Review
+    Current medications, interactions, safety concerns
+
+    ## Surgical Considerations
+    Risk factors, contraindications, perioperative plan
+
+    ## Outstanding Questions
+    Gaps in information, pending investigations
+
+    ## MDT Recommendations
+    Consensus recommendations with rationale and next steps
+  agent: mdt_coordination_agent
+  context:
+    - patient_records_task
+    - clinical_notes_task
+    - radiology_task
+    - pharmacy_review_task
+    - lab_diagnostics_task
+    - surgical_planning_task

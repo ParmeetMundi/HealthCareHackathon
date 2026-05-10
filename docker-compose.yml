@@ -1,0 +1,29 @@
+# ── CrewAI Healthcare Orchestrator — Docker Compose (local dev) ─────────────────
+#
+# Runs the single orchestrator service that hosts all agents in-process
+# via CrewAI's hierarchical crew.
+#
+# Usage:
+#   docker compose up --build    # First time: build the image and start
+#   docker compose up            # Subsequent runs (image already built)
+#   docker compose down          # Stop
+#
+# Prerequisites:
+#   Copy .env.example to .env and set your API key(s) before running.
+
+services:
+
+  orchestrator:
+    build: .
+    env_file: .env
+    environment:
+      AGENT_MODULE: orchestrator.app:a2a_app
+      PORT: "8003"
+    ports:
+      - "8003:8003"
+    volumes:
+      - chroma_data:/app/chroma_db
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
