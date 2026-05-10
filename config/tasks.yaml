@@ -1,23 +1,33 @@
 patient_records_task:
   description: >
-    Retrieve comprehensive patient data from the FHIR server for the
+    Retrieve patient data from the FHIR server that is RELEVANT to the
     following clinical question: {question}
 
-    Gather:
+    IMPORTANT — retrieve ONLY the data categories needed to answer the
+    question. Do NOT fetch everything by default.
+    - If the question is about allergies → fetch allergies only.
+    - If the question is about demographics → fetch demographics only.
+    - If the question is about medications → fetch medications only.
+    - If the question is broad (e.g. "what is wrong", "full review",
+      "comprehensive assessment") → fetch all categories.
+
+    Available data categories:
     - Patient demographics (name, DOB, gender, contacts)
     - Active conditions and diagnoses
     - Active medications with dosages
     - Known allergies
     - Care team members
+    - Immunisations, encounters, coverage, appointments
 
-    Present all data in a structured, clinically useful format. If any
+    Present data in a structured, clinically useful format. If any
     FHIR query fails, report the error clearly and continue with
     available data.
   expected_output: >
-    A structured summary containing patient demographics, active
-    problem list, current medication list with dosages, known
-    allergies, and care team composition. Each section should be
-    clearly labelled. Include dates where available.
+    A focused summary containing ONLY the patient data categories
+    relevant to the question. Each section should be clearly labelled.
+    Include dates where available. Do NOT include unrelated sections
+    — e.g. if the question is about allergies, do not include
+    demographics, conditions, or medications.
   agent: patient_records_agent
 
 clinical_notes_task:
@@ -36,10 +46,11 @@ clinical_notes_task:
     resource or delegate to other agents. Simply report "No data
     available" for that section and move on.
   expected_output: >
-    A summary of relevant clinical documents including document type,
-    date, author (if available), and key clinical content. Highlight
-    significant findings, diagnoses, treatment plans, and follow-up
-    recommendations extracted from the documents.
+    Answer the user's question using the clinical documents found.
+    Include only the findings, diagnoses, or recommendations that are
+    relevant to what was asked. If no documents exist, state that clearly
+    and stop. Do NOT use a fixed report template — shape the answer to
+    match the question.
   agent: clinical_notes_agent
   context:
     - patient_records_task
@@ -61,10 +72,12 @@ radiology_task:
     studies or radiology reports available" and provide your Final Answer
     immediately. Do NOT use additional tool calls after confirming no data.
   expected_output: >
-    A structured radiology summary listing each imaging study with
-    its modality, date, findings, impression, and recommendations.
-    Flag any urgent or critical findings. Note any recommended
-    follow-up imaging or procedures.
+    Answer the user's question using the radiology data found.
+    If imaging studies exist, include modality, date, findings, and
+    impressions relevant to the question. If NO imaging studies or
+    radiology reports exist, return ONLY:
+    "No imaging studies or radiology reports are available for this patient."
+    Do NOT pad with demographics or unrelated information.
   agent: radiology_agent
   context:
     - patient_records_task
@@ -89,12 +102,11 @@ pharmacy_review_task:
     Do NOT delegate to other agents, do NOT re-query, do NOT use
     additional tool calls.
   expected_output: >
-    A medication safety report containing:
-    - Complete active medication list with dosages
-    - Drug-drug interaction findings (with severity: major/moderate/minor)
-    - Dosage appropriateness assessment for each medication
-    - Condition-based contraindication flags
-    - Overall medication safety rating and recommendations
+    Answer the user's question using the medication data found.
+    Include only the medication details relevant to the question
+    (e.g. interactions, dosages, safety concerns). If no active
+    medications exist, state that clearly and stop. Do NOT use a
+    fixed report template — shape the answer to match the question.
   agent: pharmacist_agent
   context:
     - patient_records_task
@@ -115,12 +127,11 @@ lab_diagnostics_task:
     do NOT re-query or delegate. Report "No laboratory results or
     vital signs available" and move on immediately.
   expected_output: >
-    A structured lab summary with:
-    - Recent vital signs with reference ranges
-    - Laboratory results grouped by category (haematology, biochemistry, etc.)
-    - Abnormal values clearly flagged with reference ranges
-    - Trend indicators (↑ improving, → stable, ↓ worsening)
-    - Clinical significance notes for abnormal findings
+    Answer the user's question using the lab/vitals data found.
+    Include only the results relevant to what was asked — flag
+    abnormal values and note trends where applicable. If no lab
+    results or vitals exist, state that clearly and stop. Do NOT
+    use a fixed report template — shape the answer to the question.
   agent: lab_diagnostics_agent
   context:
     - patient_records_task
@@ -151,13 +162,12 @@ surgical_planning_task:
     noting the data gaps and recommending baseline labs. Do NOT iterate
     further or delegate to other agents.
   expected_output: >
-    A pre-operative assessment containing:
-    - ASA physical status classification estimate
-    - Condition-based risk factors with severity
-    - Medications requiring perioperative adjustment
-    - Lab values relevant to surgical fitness
-    - Contraindications or cautions
-    - Recommended post-operative monitoring plan
+    Answer the user's question using the surgical/perioperative data
+    available. Include only the risk factors, contraindications, or
+    planning details relevant to what was asked. If context shows
+    no significant data, provide a brief assessment noting gaps and
+    stop. Do NOT use a fixed report template — shape the answer to
+    the question.
   agent: surgical_planning_agent
   context:
     - patient_records_task

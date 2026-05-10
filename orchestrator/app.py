@@ -102,7 +102,9 @@ root_agent = Agent(
         "You MUST always use the run_healthcare_crew tool to answer any question. "
         "Pass the user's question directly to the tool. "
         "Return the tool's output as your final answer without modification. "
-        "Do not attempt to answer clinical questions yourself — always delegate to the crew."
+        "Do not attempt to answer clinical questions yourself — always delegate to the crew. "
+        "If the crew's output states that specific data is unavailable (e.g. no imaging studies, "
+        "no lab results), preserve that finding prominently — do NOT replace it with unrelated data."
     ),
     tools=[run_healthcare_crew],
     before_model_callback=extract_fhir_context,
