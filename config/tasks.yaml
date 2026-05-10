@@ -58,7 +58,8 @@ radiology_task:
 
     IMPORTANT: If a query returns count=0, do NOT re-query the same
     resource or delegate to other agents. Simply report "No imaging
-    studies or radiology reports available" and move on immediately.
+    studies or radiology reports available" and provide your Final Answer
+    immediately. Do NOT use additional tool calls after confirming no data.
   expected_output: >
     A structured radiology summary listing each imaging study with
     its modality, date, findings, impression, and recommendations.
@@ -74,17 +75,19 @@ pharmacy_review_task:
     question: {question}
 
     Steps:
-    1. Retrieve the patient's active medication list
-    2. Retrieve active conditions for context
+    1. Check the patient_records_task context for the active medication list first.
+       Only call "Get Active Medications" if not already in context.
+    2. If medications exist, retrieve active conditions for context
     3. Check all medication pairs for drug-drug interactions
     4. Verify dosage appropriateness for each medication
     5. Identify any medications contraindicated by patient conditions
     6. Flag any concerns with severity ratings
 
-    IMPORTANT: If the medication list returns count=0, skip steps 3-6
-    and immediately report "No active medications — no drug interaction
-    or dosage review applicable." Do NOT delegate to other agents or
-    re-query the same data.
+    IMPORTANT: If the medication list returns count=0, skip steps 2-6
+    and immediately provide your Final Answer: "No active medications —
+    no drug interaction or dosage review applicable."
+    Do NOT delegate to other agents, do NOT re-query, do NOT use
+    additional tool calls.
   expected_output: >
     A medication safety report containing:
     - Complete active medication list with dosages
@@ -127,14 +130,26 @@ surgical_planning_task:
     Assess surgical risk and planning considerations for the following
     question: {question}
 
-    Review:
+    IMPORTANT: The context from patient_records_task, lab_diagnostics_task,
+    and pharmacy_review_task is already available to you. Use that data
+    directly — do NOT re-query FHIR for conditions, medications, or labs
+    that have already been retrieved.
+
+    Review from context data:
     1. Active conditions that affect surgical risk (cardiac, pulmonary,
        renal, hepatic, metabolic)
     2. Current medications requiring perioperative management
        (anticoagulants, antiplatelets, diabetes medications, etc.)
     3. Relevant lab values (coagulation, renal function, haemoglobin)
-    4. Procedure history for relevant surgical context
-    5. Known allergies (especially anaesthesia-related)
+    4. Known allergies (especially anaesthesia-related)
+
+    Only query FHIR directly for data NOT already in context:
+    - Procedure history (if needed)
+
+    EARLY EXIT: If context shows no active conditions (beyond routine),
+    no medications, and no lab results, provide a brief ASA I assessment
+    noting the data gaps and recommending baseline labs. Do NOT iterate
+    further or delegate to other agents.
   expected_output: >
     A pre-operative assessment containing:
     - ASA physical status classification estimate
@@ -154,7 +169,11 @@ mdt_synthesis_task:
     Synthesise all specialist findings into a comprehensive MDT
     (Multi-Disciplinary Team) brief for the following question: {question}
 
-    Using the outputs from all specialist agents, create a structured
+    IMPORTANT: All specialist data is already in your context from prior
+    tasks. Do NOT re-query FHIR or delegate to other agents. Your job is
+    ONLY to synthesise the existing context into a structured document.
+
+    Using the context outputs from all specialist tasks, create a structured
     MDT document with the following mandatory sections:
     - Patient Background
     - Radiology Findings
@@ -164,8 +183,15 @@ mdt_synthesis_task:
     - Outstanding Questions
     - MDT Recommendations
 
+    For any section where the context reports "No data available" or
+    count=0, include a brief note and move on. Do NOT attempt to fetch
+    missing data.
+
     Ensure no critical findings from any specialist are omitted.
     Cross-reference findings between specialties where relevant.
+
+    EARLY EXIT: Produce the final MDT brief in a single pass from context.
+    Do not iterate or delegate.
   expected_output: >
     A complete MDT brief document with all seven required sections:
 

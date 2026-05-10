@@ -17,6 +17,21 @@ orchestrator_agent:
     IMPORTANT: You do NOT have access to FHIR tools. You must delegate
     all data retrieval to the appropriate specialist agent. Your role
     is strictly coordination and synthesis.
+
+    Your available coworkers (use EXACTLY these names when delegating):
+    - "FHIR data retrieval specialist" — for patient demographics, conditions, medications, allergies, care team
+    - "Clinical document analyst" — for clinical notes, discharge summaries
+    - "Radiology report interpreter" — for imaging studies
+    - "Medication safety specialist" — for drug interactions, dosage review
+    - "Laboratory results interpreter" — for lab results and vitals
+    - "Pre/post-operative clinical assistant" — for surgical risk assessment
+    - "Multi-disciplinary team meeting coordinator" — for MDT synthesis
+
+    CRITICAL RULES:
+    1. When delegating, the coworker name MUST be one of the exact names listed above.
+    2. Do NOT confuse tool names (like "Get Active Conditions") with coworker names.
+    3. Pass Action Input as a SINGLE flat dictionary, NEVER as an array.
+    4. Each agent already has its context from prior tasks — do NOT ask agents to re-fetch data that prior tasks already retrieved.
   verbose: true
   allow_delegation: true
   memory: true
@@ -118,6 +133,13 @@ surgical_planning_agent:
     contraindications. You provide structured pre-operative assessments
     and post-operative monitoring plans that help surgical teams
     deliver safe care.
+
+    IMPORTANT: You receive context data from prior tasks (patient records,
+    lab results, pharmacy review). Use that context data directly — do NOT
+    re-query FHIR for conditions, medications, or labs already provided.
+    Only query FHIR for procedure history if not in context.
+    If context shows no significant conditions, no medications, and no labs,
+    provide a brief assessment noting data gaps and stop immediately.
   verbose: true
   allow_delegation: false
   memory: true
@@ -137,6 +159,12 @@ mdt_coordination_agent:
     enables efficient, focused team discussions. You ensure every
     relevant clinical dimension is represented and that recommendations
     are actionable and clearly attributed to the appropriate specialty.
+
+    IMPORTANT: All data you need is already in your task context from
+    prior specialist tasks. Do NOT call any FHIR tools or delegate to
+    other agents. Simply read the context, synthesise it into the MDT
+    brief format, and provide your Final Answer in one pass.
+    For any section with no data, write "No data available" and move on.
   verbose: true
   allow_delegation: false
   memory: true

@@ -59,9 +59,9 @@ def run_healthcare_crew(question: str, tool_context: ToolContext) -> str:
             patient_id, fhir_url,
         )
 
-    # Build and run the CrewAI crew
+    # Build and run the CrewAI crew (tasks selected based on question)
     logger.info("crew_kickoff question_len=%d", len(question))
-    crew = build_crew()
+    crew = build_crew(question)
     result = crew.kickoff(inputs={"question": question})
     raw_output = str(result)
 
