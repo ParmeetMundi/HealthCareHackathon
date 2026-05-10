@@ -1,173 +1,133 @@
 patient_records_task:
   description: >
-    Retrieve patient data from the FHIR server that is RELEVANT to the
-    following clinical question: {question}
+    QUESTION: {question}
 
-    IMPORTANT — retrieve ONLY the data categories needed to answer the
-    question. Do NOT fetch everything by default.
-    - If the question is about allergies → fetch allergies only.
-    - If the question is about demographics → fetch demographics only.
-    - If the question is about medications → fetch medications only.
-    - If the question is broad (e.g. "what is wrong", "full review",
-      "comprehensive assessment") → fetch all categories.
+    STEP 1 — Classify which data categories are needed:
+    - Allergies question → call Get Allergies only
+    - Demographics question → call Get Patient Demographics only
+    - Medications question → call Get Active Medications only
+    - Conditions question → call Get Active Conditions only
+    - Care team question → call Get Care Team only
+    - Broad question ("what is wrong", "full review") → call ALL categories
 
-    Available data categories:
-    - Patient demographics (name, DOB, gender, contacts)
-    - Active conditions and diagnoses
-    - Active medications with dosages
-    - Known allergies
-    - Care team members
-    - Immunisations, encounters, coverage, appointments
+    STEP 2 — Call ONLY the identified tools. Accept each result as-is.
+    STEP 3 — Format results with clear labels and exact FHIR values.
+    STEP 4 — Return Final Answer immediately.
 
-    Present data in a structured, clinically useful format. If any
-    FHIR query fails, report the error clearly and continue with
-    available data.
+    If any tool returns count=0 or error, report it and continue.
+    Do NOT retry failed queries. Do NOT call unneeded tools.
   expected_output: >
-    A focused summary containing ONLY the patient data categories
-    relevant to the question. Each section should be clearly labelled.
-    Include dates where available. Do NOT include unrelated sections
-    — e.g. if the question is about allergies, do not include
-    demographics, conditions, or medications.
+    A focused data summary containing ONLY the categories relevant
+    to the question. Each section clearly labelled with exact values
+    and dates from FHIR. No unrelated sections.
   agent: patient_records_agent
 
 clinical_notes_task:
   description: >
-    Retrieve and analyse clinical documents related to the following
-    question: {question}
+    QUESTION: {question}
 
-    Search DocumentReference and DiagnosticReport resources for
-    relevant clinical notes, discharge summaries, referral letters,
-    and progress notes. The document content has already been decoded
-    from base64 — read the "decoded_text" field directly.
-    Summarise key findings, diagnoses, and recommendations from
-    each document.
+    Execute exactly 2 tool calls, then return Final Answer:
+    1. Call "Get Document References" → summarise decoded_text content.
+    2. Call "Get Diagnostic Reports" → summarise report conclusions.
 
-    IMPORTANT: If a query returns count=0, do NOT re-query the same
-    resource or delegate to other agents. Simply report "No data
-    available" for that section and move on.
+    If either returns count=0, note "No [resource] available" and
+    continue. After BOTH calls, compose a summary of findings relevant
+    to the question and return Final Answer. Do NOT re-query.
   expected_output: >
-    Answer the user's question using the clinical documents found.
-    Include only the findings, diagnoses, or recommendations that are
-    relevant to what was asked. If no documents exist, state that clearly
-    and stop. Do NOT use a fixed report template — shape the answer to
-    match the question.
+    A concise summary of clinical document findings relevant to the
+    question. If no documents exist, state that clearly. No fixed
+    template — shape the answer to match the question.
   agent: clinical_notes_agent
   context:
     - patient_records_task
 
 radiology_task:
   description: >
-    Retrieve and interpret radiology studies and reports for the
-    following question: {question}
+    QUESTION: {question}
 
-    Query ImagingStudy and radiology-category DiagnosticReport
-    resources. For each study found, extract and present:
-    - Study type and date
-    - Key findings
-    - Radiologist impression
-    - Recommendations for follow-up
+    Execute exactly 2 tool calls, then return Final Answer:
+    1. Call "Get Imaging Studies" → extract modality, date, body site.
+    2. Call "Get Radiology Reports" → extract findings, impression,
+       recommendations.
 
-    IMPORTANT: If a query returns count=0, do NOT re-query the same
-    resource or delegate to other agents. Simply report "No imaging
-    studies or radiology reports available" and provide your Final Answer
-    immediately. Do NOT use additional tool calls after confirming no data.
+    If BOTH return count=0, return Final Answer: "No imaging studies
+    or radiology reports are available for this patient." STOP.
+    Do NOT make additional tool calls after confirming no data.
   expected_output: >
-    Answer the user's question using the radiology data found.
-    If imaging studies exist, include modality, date, findings, and
-    impressions relevant to the question. If NO imaging studies or
-    radiology reports exist, return ONLY:
-    "No imaging studies or radiology reports are available for this patient."
-    Do NOT pad with demographics or unrelated information.
+    If studies exist: modality, date, findings, impression relevant
+    to the question. If NO studies exist: "No imaging studies or
+    radiology reports are available for this patient." Nothing else.
   agent: radiology_agent
   context:
     - patient_records_task
 
 pharmacy_review_task:
   description: >
-    Perform a comprehensive medication safety review for the following
-    question: {question}
+    QUESTION: {question}
 
-    Steps:
-    1. Check the patient_records_task context for the active medication list first.
-       Only call "Get Active Medications" if not already in context.
-    2. If medications exist, retrieve active conditions for context
-    3. Check all medication pairs for drug-drug interactions
-    4. Verify dosage appropriateness for each medication
-    5. Identify any medications contraindicated by patient conditions
-    6. Flag any concerns with severity ratings
+    STEP 1 — Check context: If patient_records_task already has the
+    medication list, use it. Do NOT call Get Active Medications again.
+    STEP 2 — If no meds in context, call "Get Active Medications" ONCE.
+    STEP 3 — If count=0, return Final Answer: "No active medications —
+    no drug interaction or dosage review applicable." STOP.
+    STEP 4 — If medications exist, call "Check Drug Interactions" for
+    relevant pairs and "Get Medication Info" for dosage verification.
+    STEP 5 — Return Final Answer with interaction findings and
+    dosage assessment.
 
-    IMPORTANT: If the medication list returns count=0, skip steps 2-6
-    and immediately provide your Final Answer: "No active medications —
-    no drug interaction or dosage review applicable."
-    Do NOT delegate to other agents, do NOT re-query, do NOT use
-    additional tool calls.
+    Do NOT re-query. Do NOT delegate. Maximum 4 tool calls total.
   expected_output: >
-    Answer the user's question using the medication data found.
-    Include only the medication details relevant to the question
-    (e.g. interactions, dosages, safety concerns). If no active
-    medications exist, state that clearly and stop. Do NOT use a
-    fixed report template — shape the answer to match the question.
+    Medication safety findings relevant to the question: active meds,
+    interactions (with severity), dosage concerns. If no meds, state
+    that clearly and stop.
   agent: pharmacist_agent
   context:
     - patient_records_task
 
 lab_diagnostics_task:
   description: >
-    Retrieve and interpret laboratory results and vital signs for the
-    following question: {question}
+    QUESTION: {question}
 
-    Query recent Observation resources for laboratory results and
-    vital signs. For each result:
-    - Identify if values are within normal reference ranges
-    - Flag abnormal or critical values
-    - Note trends where multiple readings exist (improving/stable/worsening)
-    - Correlate findings with known patient conditions
+    Execute exactly 2 tool calls, then return Final Answer:
+    1. Call "Get Lab Results" → extract values with units and ranges.
+    2. Call "Get Recent Observations" → extract vitals.
 
-    IMPORTANT: If both lab results and vital signs return count=0,
-    do NOT re-query or delegate. Report "No laboratory results or
-    vital signs available" and move on immediately.
+    For each result: flag abnormal values, note trends if multiple
+    readings exist (↑/→/↓), correlate with known conditions from context.
+
+    If BOTH return count=0, return Final Answer: "No laboratory results
+    or vital signs available for this patient." STOP.
+    Do NOT re-query. Maximum 2 tool calls.
   expected_output: >
-    Answer the user's question using the lab/vitals data found.
-    Include only the results relevant to what was asked — flag
-    abnormal values and note trends where applicable. If no lab
-    results or vitals exist, state that clearly and stop. Do NOT
-    use a fixed report template — shape the answer to the question.
+    Lab/vitals summary relevant to the question. Flag abnormal values
+    with reference ranges. Note trends. If no data, state clearly
+    and stop.
   agent: lab_diagnostics_agent
   context:
     - patient_records_task
 
 surgical_planning_task:
   description: >
-    Assess surgical risk and planning considerations for the following
-    question: {question}
+    QUESTION: {question}
 
-    IMPORTANT: The context from patient_records_task, lab_diagnostics_task,
-    and pharmacy_review_task is already available to you. Use that data
-    directly — do NOT re-query FHIR for conditions, medications, or labs
-    that have already been retrieved.
+    ALL clinical data is in your CONTEXT from prior tasks. Do NOT
+    re-query FHIR for conditions, medications, labs, or allergies.
 
-    Review from context data:
-    1. Active conditions that affect surgical risk (cardiac, pulmonary,
-       renal, hepatic, metabolic)
-    2. Current medications requiring perioperative management
-       (anticoagulants, antiplatelets, diabetes medications, etc.)
-    3. Relevant lab values (coagulation, renal function, haemoglobin)
-    4. Known allergies (especially anaesthesia-related)
+    STEP 1 — Read context: Extract conditions, medications, lab values,
+    allergies from prior task outputs.
+    STEP 2 — If procedure history is needed and not in context, call
+    "Get Procedure History" ONCE. Otherwise ZERO tool calls.
+    STEP 3 — Assess: ASA classification, surgical risk factors,
+    perioperative medication management, monitoring needs.
+    STEP 4 — Return Final Answer.
 
-    Only query FHIR directly for data NOT already in context:
-    - Procedure history (if needed)
-
-    EARLY EXIT: If context shows no active conditions (beyond routine),
-    no medications, and no lab results, provide a brief ASA I assessment
-    noting the data gaps and recommending baseline labs. Do NOT iterate
-    further or delegate to other agents.
+    EARLY EXIT: If context shows no significant conditions, no
+    medications, and no labs, return brief ASA I assessment with
+    recommendation for baseline labs. STOP.
   expected_output: >
-    Answer the user's question using the surgical/perioperative data
-    available. Include only the risk factors, contraindications, or
-    planning details relevant to what was asked. If context shows
-    no significant data, provide a brief assessment noting gaps and
-    stop. Do NOT use a fixed report template — shape the answer to
-    the question.
+    Surgical risk assessment relevant to the question: ASA class,
+    risk factors, perioperative plan. If insufficient data, note
+    gaps and recommend baseline workup. Brief and focused.
   agent: surgical_planning_agent
   context:
     - patient_records_task
@@ -176,55 +136,27 @@ surgical_planning_task:
 
 mdt_synthesis_task:
   description: >
-    Synthesise all specialist findings into a comprehensive MDT
-    (Multi-Disciplinary Team) brief for the following question: {question}
+    QUESTION: {question}
 
-    IMPORTANT: All specialist data is already in your context from prior
-    tasks. Do NOT re-query FHIR or delegate to other agents. Your job is
-    ONLY to synthesise the existing context into a structured document.
+    ZERO TOOL CALLS. All data is in your context from prior tasks.
 
-    Using the context outputs from all specialist tasks, create a structured
-    MDT document with the following mandatory sections:
-    - Patient Background
-    - Radiology Findings
-    - Lab Summary
-    - Medication Review
-    - Surgical Considerations
-    - Outstanding Questions
-    - MDT Recommendations
+    Read every specialist task output, then write the MDT brief with
+    these sections:
+    1. Patient Background — demographics, presenting complaint, history
+    2. Radiology Findings — imaging studies, key findings
+    3. Lab Summary — abnormal results, trends, significance
+    4. Medication Review — current meds, interactions, safety concerns
+    5. Surgical Considerations — risk factors, perioperative plan
+    6. Outstanding Questions — data gaps, pending investigations
+    7. MDT Recommendations — actionable next steps with rationale
 
-    For any section where the context reports "No data available" or
-    count=0, include a brief note and move on. Do NOT attempt to fetch
-    missing data.
-
-    Ensure no critical findings from any specialist are omitted.
-    Cross-reference findings between specialties where relevant.
-
-    EARLY EXIT: Produce the final MDT brief in a single pass from context.
-    Do not iterate or delegate.
+    For sections with no data in context, write "No data available."
+    Cross-reference findings across specialties. Return Final Answer
+    in a SINGLE pass.
   expected_output: >
-    A complete MDT brief document with all seven required sections:
-
-    ## Patient Background
-    Demographics, presenting complaint, relevant history
-
-    ## Radiology Findings
-    Summary of imaging studies and key findings
-
-    ## Lab Summary
-    Abnormal results, trends, clinical significance
-
-    ## Medication Review
-    Current medications, interactions, safety concerns
-
-    ## Surgical Considerations
-    Risk factors, contraindications, perioperative plan
-
-    ## Outstanding Questions
-    Gaps in information, pending investigations
-
-    ## MDT Recommendations
-    Consensus recommendations with rationale and next steps
+    A complete MDT brief with all seven sections. Each section
+    populated from specialist context or marked "No data available."
+    Recommendations must be actionable with clear next steps.
   agent: mdt_coordination_agent
   context:
     - patient_records_task
@@ -233,3 +165,41 @@ mdt_synthesis_task:
     - pharmacy_review_task
     - lab_diagnostics_task
     - surgical_planning_task
+
+general_purpose_task:
+  description: >
+    QUESTION: {question}
+
+    This is a general healthcare request that does not fall under any
+    specialist domain (not radiology, pharmacy, lab, surgical, or clinical
+    notes). Examples include nutrition plans, exercise plans, lifestyle
+    advice, wellness recommendations, and patient education.
+
+    STEP 1 — CHECK CONTEXT: Read patient data from prior task outputs
+    (conditions, medications, allergies, demographics).
+    STEP 2 — FETCH IF NEEDED: If relevant patient data is missing from
+    context, call the appropriate FHIR tools to retrieve it. Focus on
+    conditions, medications, allergies, and demographics.
+    STEP 3 — PERSONALISE: Tailor your response to the patient's specific
+    health situation, considering:
+    - Active conditions and their implications
+    - Current medications and potential interactions
+    - Known allergies and dietary restrictions
+    - Demographics (age, gender) for age-appropriate recommendations
+    STEP 4 — RESPOND: Provide a comprehensive, structured, actionable
+    response with clear sections and practical recommendations.
+
+    RULES:
+    - Always personalise to the patient's data.
+    - Flag recommendations that require specialist review.
+    - Include appropriate clinical disclaimers.
+    - Do NOT re-query data already in context.
+    - Maximum 5 tool calls.
+  expected_output: >
+    A comprehensive, personalised response to the patient's request.
+    Structured with clear sections, practical recommendations, and
+    any relevant warnings or disclaimers. Tailored to the patient's
+    conditions, medications, and allergies.
+  agent: general_purpose_agent
+  context:
+    - patient_records_task

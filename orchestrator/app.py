@@ -98,13 +98,15 @@ root_agent = Agent(
         "diagnoses, treatment recommendations, risk stratification, and care plans."
     ),
     instruction=(
-        "You are a clinical decision support system acting as a senior attending physician. "
-        "You MUST always use the run_healthcare_crew tool to answer any question. "
-        "Pass the user's question directly to the tool. "
-        "Return the tool's output as your final answer without modification. "
-        "Do not attempt to answer clinical questions yourself — always delegate to the crew. "
-        "If the crew's output states that specific data is unavailable (e.g. no imaging studies, "
-        "no lab results), preserve that finding prominently — do NOT replace it with unrelated data."
+        "You are a clinical decision support gateway. You have ONE tool: run_healthcare_crew. "
+        "For EVERY user message, you MUST:\n"
+        "1. Call run_healthcare_crew with the user's question passed VERBATIM as the 'question' argument.\n"
+        "2. Return the tool's output EXACTLY as received — do NOT rewrite, summarise, or add commentary.\n"
+        "3. If the output states data is unavailable (e.g. 'no imaging studies'), preserve that finding "
+        "as the lead statement. Do NOT substitute unrelated data.\n"
+        "4. NEVER answer clinical questions from your own knowledge — ALWAYS delegate to the crew.\n"
+        "5. Do NOT call the tool more than once per user message.\n"
+        "6. Do NOT add disclaimers, headers, or formatting not present in the crew output."
     ),
     tools=[run_healthcare_crew],
     before_model_callback=extract_fhir_context,

@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse
 
 from shared.fhir_hook import extract_fhir_from_payload
 from shared.logging_utils import redact_headers, safe_pretty_json, token_fingerprint
+from shared.task_cache import task_cache
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,51 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             if json.dumps(parsed, sort_keys=True) != before:
                 body_dirty = True
                 logger.info("jsonrpc_roles_normalised")
+
+        # ── Task-ID context injection ──────────────────────────────────────
+        # When PO sends a follow-up message referencing a previous task ID,
+        # the a2a-sdk rejects it ("task in terminal state: completed").
+        # We resolve this by:
+        #   1. Looking up the cached result for that task ID.
+        #   2. Stripping the taskId so the SDK treats this as a new task.
+        #   3. Prepending the previous result as context to the question.
+        if isinstance(parsed, dict):
+            params = parsed.get("params")
+            if isinstance(params, dict):
+                message = params.get("message")
+                if isinstance(message, dict):
+                    ref_task_id = message.get("taskId")
+                    if ref_task_id:
+                        cached_result = task_cache.get(ref_task_id)
+                        if cached_result is not None:
+                            # Inject previous result as context into the message text
+                            parts = message.get("parts", [])
+                            context_prefix = (
+                                f"[PREVIOUS TASK CONTEXT — task_id={ref_task_id}]\n"
+                                f"{cached_result}\n"
+                                f"[END PREVIOUS TASK CONTEXT]\n\n"
+                            )
+                            for part in parts:
+                                if isinstance(part, dict) and "text" in part:
+                                    part["text"] = context_prefix + part["text"]
+                                    break
+                            # Remove the taskId so the SDK creates a new task
+                            del message["taskId"]
+                            body_dirty = True
+                            logger.info(
+                                "task_context_injected ref_task_id=%s context_len=%d",
+                                ref_task_id, len(cached_result),
+                            )
+                        else:
+                            # No cached result — still strip taskId to avoid
+                            # the "terminal state" error; the agent will handle
+                            # the question without prior context.
+                            del message["taskId"]
+                            body_dirty = True
+                            logger.warning(
+                                "task_context_not_found ref_task_id=%s (expired or unknown)",
+                                ref_task_id,
+                            )
 
         if body_dirty:
             body_bytes = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
@@ -254,6 +300,18 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                     resp_parsed["result"] = {"task": task}
                     logger.info("response_reshaped_to_po_a2a_json task_id=%s state=%s",
                                 task.get("id"), task["status"]["state"])
+
+                    # ── Cache completed task results ───────────────────────
+                    # Store the text from artifacts so follow-up messages
+                    # referencing this task ID can retrieve the context.
+                    if task["status"]["state"] == "TASK_STATE_COMPLETED" and task.get("id"):
+                        result_texts = []
+                        for art in clean_artifacts:
+                            for part in art.get("parts", []):
+                                if "text" in part:
+                                    result_texts.append(part["text"])
+                        if result_texts:
+                            task_cache.put(task["id"], "\n\n".join(result_texts))
 
                 resp_body = json.dumps(resp_parsed, ensure_ascii=False).encode("utf-8")
 

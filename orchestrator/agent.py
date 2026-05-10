@@ -287,6 +287,15 @@ def _build_tasks(
             if context_tasks:
                 tasks[name].context = context_tasks
                 logger.info("task_context_wired task=%s context=%s", name, [k for k in cfg["context"] if k in tasks])
+    
+    # CrewAI requires at most one async task at the end of the list.
+    # Force the last task to be synchronous to satisfy this constraint.
+    if tasks:
+        last_task = list(tasks.values())[-1]
+        if last_task.async_execution:
+            last_task.async_execution = False
+            logger.info("last_task_forced_sync name=%s", list(tasks.keys())[-1])
+
 
     return tasks
 
