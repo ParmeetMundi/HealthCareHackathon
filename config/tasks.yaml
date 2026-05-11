@@ -180,26 +180,33 @@ general_purpose_task:
     STEP 2 — FETCH IF NEEDED: If relevant patient data is missing from
     context, call the appropriate FHIR tools to retrieve it. Focus on
     conditions, medications, allergies, and demographics.
-    STEP 3 — PERSONALISE: Tailor your response to the patient's specific
-    health situation, considering:
-    - Active conditions and their implications
-    - Current medications and potential interactions
-    - Known allergies and dietary restrictions
-    - Demographics (age, gender) for age-appropriate recommendations
+    STEP 3 — PERSONALISE OR GENERALISE:
+    - If patient data is available: tailor your response to the patient's
+      specific conditions, medications, allergies, and demographics.
+    - If patient data is NOT available or all categories are empty:
+      provide a GENERIC but comprehensive response. For example, if a
+      nutritional plan is requested, provide a full general nutritional
+      plan covering balanced meals, macronutrients, hydration, vitamins,
+      and healthy eating habits. NEVER just say "no data available" and
+      stop — always give the user actionable content.
     STEP 4 — RESPOND: Provide a comprehensive, structured, actionable
     response with clear sections and practical recommendations.
 
     RULES:
-    - Always personalise to the patient's data.
+    - If patient data exists, personalise to it.
+    - If no patient data exists, provide a well-structured generic plan
+      and note it is general guidance.
     - Flag recommendations that require specialist review.
     - Include appropriate clinical disclaimers.
     - Do NOT re-query data already in context.
     - Maximum 5 tool calls.
+    - NEVER return an empty or data-unavailable-only response.
   expected_output: >
-    A comprehensive, personalised response to the patient's request.
-    Structured with clear sections, practical recommendations, and
-    any relevant warnings or disclaimers. Tailored to the patient's
-    conditions, medications, and allergies.
+    A comprehensive response to the patient's request — personalised
+    if patient data is available, or a well-structured generic plan
+    if not. Must include clear sections, practical recommendations,
+    and any relevant warnings or disclaimers. NEVER be empty or just
+    state that data is unavailable without providing actionable content.
   agent: general_purpose_agent
   context:
     - patient_records_task

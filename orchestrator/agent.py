@@ -67,6 +67,7 @@ _AGENT_MAX_ITER: dict[str, int] = {
     "lab_diagnostics_agent": 2,   # 2 calls: observations + lab results
     "surgical_planning_agent": 2, # context-driven, at most 1 FHIR call for procedure history
     "mdt_coordination_agent": 1,  # pure synthesis from context, no tool calls needed
+    "general_purpose_agent": 6,  # may need up to 4 FHIR calls + synthesis
 }
 
 # ── Tool assignments per agent ─────────────────────────────────────────────────
@@ -108,13 +109,33 @@ _AGENT_TOOLS = {
         get_family_member_history,
     ],
     "mdt_coordination_agent": [],
+    "general_purpose_agent": [
+        get_patient_demographics,
+        get_active_conditions,
+        get_active_medications,
+        get_allergies,
+    ],
 }
 
 _RAG_TOOLS = [rag_store, rag_retrieve]
 
+# ── Coworker descriptions for dynamic manager backstory ────────────────────────
+# Maps agent keys to the coworker line the manager sees.
+_COWORKER_DESCRIPTIONS: dict[str, str] = {
+    "patient_records_agent": '"FHIR data retrieval specialist" — demographics, conditions, medications, allergies, care team',
+    "clinical_notes_agent": '"Clinical document analyst" — clinical notes, discharge summaries',
+    "radiology_agent": '"Radiology report interpreter" — imaging studies',
+    "pharmacist_agent": '"Medication safety specialist" — drug interactions, dosage review',
+    "lab_diagnostics_agent": '"Laboratory results interpreter" — lab results and vitals',
+    "surgical_planning_agent": '"Pre/post-operative clinical assistant" — surgical risk assessment',
+    "mdt_coordination_agent": '"Multi-disciplinary team meeting coordinator" — MDT synthesis',
+    "general_purpose_agent": '"General healthcare assistant" — nutrition plans, exercise plans, lifestyle advice, and any other request not covered by the above specialists',
+}
+
 # ── Cached agents (built once, reused across requests) ─────────────────────────
 _cached_agents: dict[str, Agent] | None = None
 _cached_manager: Agent | None = None
+_manager_backstory_template: str | None = None
 _agents_cfg: dict | None = None
 _tasks_cfg: dict | None = None
 
@@ -195,6 +216,12 @@ def _classify_question(question: str) -> set[str]:
     specialist_tasks = tasks - {"patient_records_task", "mdt_synthesis_task"}
     if len(specialist_tasks) >= 3:
         tasks.add("mdt_synthesis_task")
+
+    # If no specialist matched beyond patient_records, route to the
+    # general-purpose agent as a catch-all for nutrition plans, exercise
+    # plans, lifestyle advice, and other non-specialist requests.
+    if tasks == {"patient_records_task"}:
+        tasks.add("general_purpose_task")
 
     # If only patient_records matched, that's fine — single-task crew
     route = "targeted" if len(tasks) <= 3 else "multi_specialist"
@@ -287,7 +314,7 @@ def _build_tasks(
             if context_tasks:
                 tasks[name].context = context_tasks
                 logger.info("task_context_wired task=%s context=%s", name, [k for k in cfg["context"] if k in tasks])
-    
+
     # CrewAI requires at most one async task at the end of the list.
     # Force the last task to be synchronous to satisfy this constraint.
     if tasks:
@@ -295,7 +322,6 @@ def _build_tasks(
         if last_task.async_execution:
             last_task.async_execution = False
             logger.info("last_task_forced_sync name=%s", list(tasks.keys())[-1])
-
 
     return tasks
 
@@ -311,6 +337,8 @@ def build_crew(question: str = "") -> Crew:
     Args:
         question: The clinical question. Used to classify which tasks to run.
     """
+    global _manager_backstory_template
+
     agents, manager_agent = _build_agents()
     tasks_cfg = _tasks_cfg or _load_yaml("tasks.yaml")
 
@@ -320,6 +348,25 @@ def build_crew(question: str = "") -> Crew:
     # Collect worker agents (only those needed by selected tasks)
     needed_agent_keys = {tasks_cfg[t]["agent"] for t in needed_tasks if t in tasks_cfg}
     worker_agents = [a for name, a in agents.items() if name != "orchestrator_agent" and name in needed_agent_keys]
+
+    # ── Dynamic manager backstory: list ONLY available coworkers ────────────
+    # Prevents the manager from trying to delegate to agents not in this crew.
+    if _manager_backstory_template is None:
+        _manager_backstory_template = manager_agent.backstory
+
+    coworker_lines = [
+        f"    - {_COWORKER_DESCRIPTIONS[k]}"
+        for k in needed_agent_keys
+        if k in _COWORKER_DESCRIPTIONS
+    ]
+    coworker_section = "\n".join(coworker_lines)
+    manager_agent.backstory = re.sub(
+        r"(── COWORKER NAMES[^─]*──\n).*?(\n\s*── HARD RULES)",
+        rf"\1{coworker_section}\2",
+        _manager_backstory_template,
+        flags=re.DOTALL,
+    )
+    logger.info("manager_backstory_updated available_coworkers=%s", sorted(needed_agent_keys))
 
     crew = Crew(
         agents=worker_agents,
