@@ -212,15 +212,20 @@ mdt_synthesis_task:
     2. Radiology Findings — imaging studies, key findings
     3. Lab Summary — abnormal results, trends, significance
     4. Medication Review — current meds, interactions, safety concerns
-    5. Surgical Considerations — risk factors, perioperative plan
-    6. Outstanding Questions — data gaps, pending investigations
-    7. MDT Recommendations — actionable next steps with rationale
+    5. Treatment Recommendations — medication prescriptions from the
+       attending physician (drug name, dosage, route, frequency,
+       duration, rationale). If the doctor task provided recommendations,
+       include them here verbatim. If no doctor task output is available,
+       write "No treatment recommendations available."
+    6. Surgical Considerations — risk factors, perioperative plan
+    7. Outstanding Questions — data gaps, pending investigations
+    8. MDT Recommendations — actionable next steps with rationale
 
     For sections with no data in context, write "No data available."
     Cross-reference findings across specialties. Return Final Answer
     in a SINGLE pass.
   expected_output: >
-    A complete MDT brief with all seven sections. Each section
+    A complete MDT brief with all eight sections. Each section
     populated from specialist context or marked "No data available."
     Recommendations must be actionable with clear next steps.
   agent: mdt_coordination_agent
@@ -231,6 +236,7 @@ mdt_synthesis_task:
     - pharmacy_review_task
     - lab_diagnostics_task
     - surgical_planning_task
+    - doctor_prescription_task
 
 general_purpose_task:
   description: >

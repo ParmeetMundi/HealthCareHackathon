@@ -41,6 +41,7 @@ _MDT_REQUIRED_SECTIONS = [
     "Radiology",
     "Lab Summary",
     "Medication Review",
+    "Treatment Recommendations",
     "Surgical Considerations",
     "Recommendations",
 ]

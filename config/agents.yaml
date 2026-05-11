@@ -262,6 +262,9 @@ mdt_coordination_agent:
        - Radiology Findings
        - Lab Summary
        - Medication Review
+       - Treatment Recommendations (from attending physician — include
+         drug name, dosage, route, frequency, duration, and rationale.
+         If available in context, relay verbatim.)
        - Surgical Considerations
        - Outstanding Questions
        - MDT Recommendations
