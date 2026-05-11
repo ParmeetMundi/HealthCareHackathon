@@ -66,6 +66,7 @@ _AGENT_MAX_ITER: dict[str, int] = {
     "pharmacist_agent": 2,        # 1 call to check meds, early exit if count=0
     "lab_diagnostics_agent": 2,   # 2 calls: observations + lab results
     "surgical_planning_agent": 2, # context-driven, at most 1 FHIR call for procedure history
+    "doctor_agent": 2,            # reviews context + up to 2 FHIR calls for interactions/allergies
     "mdt_coordination_agent": 1,  # pure synthesis from context, no tool calls needed
     "general_purpose_agent": 6,  # may need up to 4 FHIR calls + synthesis
 }
@@ -108,6 +109,16 @@ _AGENT_TOOLS = {
         get_procedure_history,
         get_family_member_history,
     ],
+    "doctor_agent": [
+        get_active_conditions,
+        get_active_medications,
+        get_allergies,
+        get_lab_results,
+        get_patient_demographics,
+        check_drug_interactions,
+        get_medication_info,
+        get_service_requests,
+    ],
     "mdt_coordination_agent": [],
     "general_purpose_agent": [
         get_patient_demographics,
@@ -128,6 +139,7 @@ _COWORKER_DESCRIPTIONS: dict[str, str] = {
     "pharmacist_agent": '"Medication safety specialist" — drug interactions, dosage review',
     "lab_diagnostics_agent": '"Laboratory results interpreter" — lab results and vitals',
     "surgical_planning_agent": '"Pre/post-operative clinical assistant" — surgical risk assessment',
+    "doctor_agent": '"Attending physician and prescriber" — medication prescriptions, diagnostic test orders, symptom-based treatment',
     "mdt_coordination_agent": '"Multi-disciplinary team meeting coordinator" — MDT synthesis',
     "general_purpose_agent": '"General healthcare assistant" — nutrition plans, exercise plans, lifestyle advice, and any other request not covered by the above specialists',
 }
@@ -172,6 +184,10 @@ _TASK_PATTERNS: list[tuple[str, re.Pattern]] = [
         r"surg|operat|pre[\-\s]?op|post[\-\s]?op|anesthes|anaesthes|procedure\s+risk|asa\s+class",
         re.IGNORECASE,
     )),
+    ("doctor_prescription_task", re.compile(
+        r"prescri|treat|therap|symptom|diagnos|medicine|fever|pain|cough|headache|nausea|infect",
+        re.IGNORECASE,
+    )),
 ]
 
 # Patterns that trigger the full MDT pipeline (all tasks)
@@ -198,7 +214,8 @@ def _classify_question(question: str) -> set[str]:
     if _MDT_PATTERN.search(question):
         tasks.update(
             "clinical_notes_task", "radiology_task", "pharmacy_review_task",
-            "lab_diagnostics_task", "surgical_planning_task", "mdt_synthesis_task",
+            "lab_diagnostics_task", "surgical_planning_task",
+            "doctor_prescription_task", "mdt_synthesis_task",
         )
         logger.info("question_classified route=mdt_full question_len=%d", len(question))
         return tasks
@@ -210,6 +227,10 @@ def _classify_question(question: str) -> set[str]:
 
     # Add surgical_planning_task dependencies if selected
     if "surgical_planning_task" in tasks:
+        tasks.update(("lab_diagnostics_task", "pharmacy_review_task"))
+
+    # Add doctor_prescription_task dependencies if selected
+    if "doctor_prescription_task" in tasks:
         tasks.update(("lab_diagnostics_task", "pharmacy_review_task"))
 
     # Only synthesise if 3+ specialist tasks are running
