@@ -13,17 +13,36 @@
 
 services:
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: healthcare
+      POSTGRES_PASSWORD: healthcare
+      POSTGRES_DB: healthcare
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U healthcare"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   orchestrator:
     build: .
     env_file: .env
     environment:
       AGENT_MODULE: orchestrator.app:a2a_app
       PORT: "8003"
+      DATABASE_URL: postgresql://healthcare:healthcare@postgres:5432/healthcare
     ports:
       - "8003:8003"
-    volumes:
-      - chroma_data:/app/chroma_db
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  chroma_data:
+  pg_data:

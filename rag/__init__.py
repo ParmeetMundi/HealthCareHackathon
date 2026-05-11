@@ -1,1 +1,1 @@
-# rag — RAG (Retrieval-Augmented Generation) layer backed by ChromaDB.
+# rag — RAG (Retrieval-Augmented Generation) layer backed by PostgreSQL + pgvector.

@@ -25,12 +25,21 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import ToolContext
 
 from shared.app_factory import create_a2a_app
+from shared.db import init_db
 from shared.fhir_hook import extract_fhir_context
 from shared.tools.fhir import set_fhir_context
+from shared.patient_chat_store import add_turn, get_context_for_prompt
 from guardrails.output_validator import validate_crew_output
 from .agent import build_crew
 
 logger = logging.getLogger(__name__)
+
+# Initialise PostgreSQL schema on import (tables created IF NOT EXISTS)
+try:
+    init_db()
+    logger.info("postgres_schema_initialised")
+except Exception as exc:
+    logger.error("postgres_init_failed error=%s", exc)
 
 
 # ── Bridge tool: runs the CrewAI crew ──────────────────────────────────────────
@@ -59,10 +68,26 @@ def run_healthcare_crew(question: str, tool_context: ToolContext) -> str:
             patient_id, fhir_url,
         )
 
+    # ── Retrieve patient chat history and prepend as context ───────────
+    enriched_question = question
+    if patient_id:
+        try:
+            chat_context = get_context_for_prompt(patient_id)
+            if chat_context:
+                enriched_question = chat_context + question
+                logger.info(
+                    "chat_history_injected patient_id=%s context_len=%d",
+                    patient_id, len(chat_context),
+                )
+            # Store the user's question
+            add_turn(patient_id, "user", question)
+        except Exception as exc:
+            logger.warning("chat_history_error action=retrieve error=%s", exc)
+
     # Build and run the CrewAI crew (tasks selected based on question)
-    logger.info("crew_kickoff question_len=%d", len(question))
-    crew = build_crew(question)
-    result = crew.kickoff(inputs={"question": question})
+    logger.info("crew_kickoff question_len=%d", len(enriched_question))
+    crew = build_crew(enriched_question)
+    result = crew.kickoff(inputs={"question": enriched_question})
     raw_output = str(result)
 
     # Validate output via guardrails
@@ -75,6 +100,13 @@ def run_healthcare_crew(question: str, tool_context: ToolContext) -> str:
 
     if validation["warnings"]:
         logger.warning("crew_output_warnings warnings=%s", validation["warnings"])
+
+    # ── Store the assistant response in patient chat history ───────────
+    if patient_id:
+        try:
+            add_turn(patient_id, "assistant", validation["sanitized_output"])
+        except Exception as exc:
+            logger.warning("chat_history_error action=store_response error=%s", exc)
 
     return validation["sanitized_output"]
 
